@@ -5,7 +5,7 @@ import time
 
 from cache_aside import LRUCache
 
-REST_SERVER_URL = "http://localhost:5000/urls"
+REST_SERVER_URL = "http://server:5000/urls"
 PROXY_HOST = '0.0.0.0'
 PROXY_PORT = 8080
 CACHE_CAPACITY = 5  # Capacidade máxima do cache LRU
@@ -33,12 +33,12 @@ class InterceptorProxy:
                 if cached_url:
                     return {"url_original": cached_url, "fonte": "cache"}
                 
-                # Se Cache Miss, vai ao Servidor [cite: 97, 113]
+                # Se Cache Miss, vai ao Servidor
                 print(f"[CACHE MISS] Consultando servidor REST para {codigo}...")
                 response = requests.get(f"{REST_SERVER_URL}/{codigo}")
                 if response.status_code == 200:
                     url_original = response.json()["url_original"]
-                    self.add_to_cache(codigo, url_original)
+                    self.cache.put(codigo, url_original)
                     return response.json()
                 return response.json()
 
@@ -76,5 +76,7 @@ class InterceptorProxy:
             client_conn.close()
 
 if __name__ == '__main__':
+    print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaA")
     proxy = InterceptorProxy()
+    print("[PROXY] Iniciando interceptador...")
     proxy.start()
