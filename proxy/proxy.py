@@ -3,6 +3,9 @@ import json
 import requests
 import time
 
+import threading
+import queue
+
 from cache_aside import LRUCache
 
 REST_SERVER_URL = "http://server:5000/urls"
@@ -11,14 +14,25 @@ PROXY_PORT = 8080
 CACHE_CAPACITY = 5  # Capacidade máxima do cache LRU
 RATE_LIMIT_SECONDS = 1  # Intervalo mínimo entre requisições por IP (Throttling)
 
+# Prioridade definida conforme a ação
+PRIORIDADES = {
+    "GET": 0,       # maior prioridade posi é a operação mais frequente e sensível a atraso
+    "DELETE": 1,    # importante para manter coerência do cache
+    "POST": 2       # menor prioridade
+}
+
 class InterceptorProxy:
     def __init__(self):
         # Padrão Obrigatório: Cache-Aside com política LRU
         self.cache = LRUCache(capacity=CACHE_CAPACITY)
         
-        # TODO: Segundo Padrão: Rate Limiting (Throttling)
-        # Armazena o timestamp da última requisição de cada cliente
-        # self.last_request_time = {}
+        # Segundo Padrão: Fila de prioridade
+        self.fila_prioridade = queue.PriorityQueue()
+        self.contador_requisicoes = 0
+
+        # Thread responsável por consumir a fila
+        self.worker = threading.Thread(target=self.processar_fila, daemon=True)
+        self.worker.start()
 
     def process_request(self, raw_data, client_address):
         """Lógica central: decide entre Cache, API REST ou Bloqueio."""
@@ -56,6 +70,37 @@ class InterceptorProxy:
 
         except Exception as e:
             return {"erro": str(e)}
+        
+    def definir_prioridade(self, raw_data):
+        """
+        Define a prioridade da requisição antes de colocá-la na fila.
+        """
+        try:
+            request_json = json.loads(raw_data.decode("utf-8"))
+            acao = request_json.get("acao")
+            return PRIORIDADES.get(acao, 99)
+        except Exception:
+            return 99
+
+    def processar_fila(self):
+        """
+        Processa continuamente as requisições da fila.
+        Requisições com menor valor de prioridade são processadas primeiro.
+        """
+        while True:
+            prioridade, ordem_chegada, raw_data, client_conn, addr = self.fila_prioridade.get()
+
+            print(f"[FILA] Processando requisição de {addr} | prioridade={prioridade}")
+
+            try:
+                resposta = self.process_request(raw_data, addr)
+                client_conn.send(json.dumps(resposta).encode("utf-8"))
+            except Exception as e:
+                erro = {"erro": str(e)}
+                client_conn.send(json.dumps(erro).encode("utf-8"))
+            finally:
+                client_conn.close()
+                self.fila_prioridade.task_done()
 
     def start(self):
         """Inicia o Servidor de Sockets TCP."""
@@ -70,10 +115,22 @@ class InterceptorProxy:
             
             data = client_conn.recv(1024)
             if data:
-                resposta = self.process_request(data, addr)
-                client_conn.send(json.dumps(resposta).encode('utf-8'))
-            
-            client_conn.close()
+                prioridade = self.definir_prioridade(data)
+
+                self.contador_requisicoes += 1
+                ordem_chegada = self.contador_requisicoes
+
+                self.fila_prioridade.put(
+                    (prioridade, ordem_chegada, data, client_conn, addr)
+                )
+
+                print(
+                    f"[FILA] Requisição adicionada | "
+                    f"addr={addr} | prioridade={prioridade} | posição aproximada={self.fila_prioridade.qsize()}"
+                )
+            else:
+                client_conn.close()
+        
 
 if __name__ == '__main__':
     print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaA")
