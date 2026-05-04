@@ -12,13 +12,12 @@ REST_SERVER_URL = "http://server:5000/urls"
 PROXY_HOST = '0.0.0.0'
 PROXY_PORT = 8080
 CACHE_CAPACITY = 5  # Capacidade máxima do cache LRU
-RATE_LIMIT_SECONDS = 1  # Intervalo mínimo entre requisições por IP (Throttling)
 
 # Prioridade definida conforme a ação
 PRIORIDADES = {
-    "GET": 0,       # maior prioridade posi é a operação mais frequente e sensível a atraso
-    "DELETE": 1,    # importante para manter coerência do cache
-    "POST": 2       # menor prioridade
+    "resolve": 0,       # GET - maior prioridade pois é a operação mais frequente e sensível a atraso
+    "remove": 1,        # DELETE - importante para manter coerência do cache
+    "encurta": 2        # POST - menor prioridade
 }
 
 class InterceptorProxy:
@@ -133,7 +132,7 @@ class InterceptorProxy:
         
 
 if __name__ == '__main__':
-    print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaA")
+    print("[DEBUG] O interceptador vai iniciar")
     proxy = InterceptorProxy()
     print("[PROXY] Iniciando interceptador...")
     proxy.start()
