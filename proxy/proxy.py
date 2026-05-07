@@ -1,3 +1,4 @@
+import os
 import socket
 import json
 import requests
@@ -8,10 +9,25 @@ import queue
 
 from cache_aside import LRUCache
 
-REST_SERVER_URL = "http://server:5000/urls"
-PROXY_HOST = '0.0.0.0'
-PROXY_PORT = 8080
-CACHE_CAPACITY = 5  # Capacidade máxima do cache LRU
+
+def load_config(path="config.txt"):
+    cfg = {}
+    if os.path.exists(path):
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                cfg[k.strip()] = v.strip()
+    return cfg
+
+
+CONFIG = load_config()
+REST_SERVER_URL = os.getenv("REST_SERVER_URL", CONFIG.get("rest_server_url", "http://server:5000/urls"))
+PROXY_HOST = os.getenv("PROXY_BIND_HOST", CONFIG.get("proxy_host", "0.0.0.0"))
+PROXY_PORT = int(os.getenv("PROXY_BIND_PORT", CONFIG.get("proxy_port", "8080")))
+CACHE_CAPACITY = int(os.getenv("CACHE_CAPACITY", CONFIG.get("cache_capacity", "5")))
 
 # Prioridade definida conforme a ação
 PRIORIDADES = {

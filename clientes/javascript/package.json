@@ -1,0 +1,9 @@
+{
+  "name": "encurtador-client-js",
+  "version": "1.0.0",
+  "description": "Cliente JavaScript do Encurtador de URLs Distribuído (INE5418)",
+  "main": "client.js",
+  "scripts": {
+    "start": "node example.js"
+  }
+}

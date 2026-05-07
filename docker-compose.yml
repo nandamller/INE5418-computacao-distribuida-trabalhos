@@ -4,7 +4,9 @@ services:
     container_name: api_rest_servidor
     restart: always
     ports:
-      - "5000:5000"
+      - "5050:5000"
+    volumes:
+      - ./config.txt:/server/config.txt:ro
     networks:
       - distributed-network
 
@@ -17,10 +19,9 @@ services:
     depends_on:
       - server
     environment:
-      - REST_SERVER_URL=http://server:5000/urls
-      - CACHE_CAPACITY=5
-      - THROTTLING_LIMIT=1.0
       - PYTHONUNBUFFERED=1
+    volumes:
+      - ./config.txt:/proxy/config.txt:ro
     networks:
       - distributed-network
 
@@ -28,9 +29,17 @@ services:
     build: ./clients/python
     depends_on:
       - proxy
-    environment:
-      - PROXY_HOST=proxy
-      - PROXY_PORT=8080
+    volumes:
+      - ./config.txt:/client/config.txt:ro
+    networks:
+      - distributed-network
+
+  client-js:
+    build: ./clientes/javascript
+    depends_on:
+      - proxy
+    volumes:
+      - ./config.txt:/client/config.txt:ro
     networks:
       - distributed-network
 

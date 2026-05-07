@@ -1,5 +1,28 @@
 from flask import Flask, request, jsonify
+import os
 import uuid
+
+
+def load_config(path="config.txt"):
+    cfg = {}
+    if os.path.exists(path):
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                cfg[k.strip()] = v.strip()
+    return cfg
+
+
+def cfg_get(cfg, key, default, env_key=None):
+    return os.getenv(env_key, cfg.get(key, default)) if env_key else cfg.get(key, default)
+
+
+CONFIG = load_config()
+SERVER_HOST = cfg_get(CONFIG, "server_host", "0.0.0.0", "SERVER_HOST")
+SERVER_PORT = int(cfg_get(CONFIG, "server_port", "5000", "SERVER_PORT"))
 
 app = Flask(__name__)
 
@@ -8,7 +31,7 @@ app = Flask(__name__)
 url_storage = {}
 
 # Base da URL curta (configurável)
-BASE_HOST = "http://localhost:5000/r/"
+BASE_HOST = f"http://localhost:{SERVER_PORT}/r/"
 
 @app.route('/urls', methods=['POST'])
 def encurtar_url():
@@ -92,6 +115,5 @@ def listar_urls():
     return jsonify(lista), 200
 
 if __name__ == '__main__':
-    # O servidor roda na porta 5000 por padrão. 
-    print("[SERVIDOR] Iniciando API REST na porta 5000...")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    print(f"[SERVIDOR] Iniciando API REST em {SERVER_HOST}:{SERVER_PORT}...")
+    app.run(host=SERVER_HOST, port=SERVER_PORT, debug=True)
