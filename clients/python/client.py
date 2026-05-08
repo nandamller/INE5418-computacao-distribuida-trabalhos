@@ -1,6 +1,7 @@
 import os
 import socket
 import json
+import time
 
 
 def _load_config(path="config.txt"):
@@ -55,10 +56,41 @@ class EncurtadorClient:
 if __name__ == "__main__":
     c = EncurtadorClient()
     
-    # 1. Encurtando
+    # 1. Encurta
     print("Testando Encurta:", c.encurta("https://www.ufsc.br"))
     
-    # 2. Resolvendo (Deve gerar Cache Hit no Interceptador na segunda vez)
+    # 2. Encurta e resolve, que também adiciona na cache
     res = c.encurta("https://www.inf.ufsc.br")
+    cod = res.get("codigo")
+    print(f"Resolvendo {cod}:", c.resolve(cod))
+    
+    # 3. Cache hit
+    print(f"Resolvendo {cod}:", c.resolve(cod))
+
+    # Tempo para outro cliente processar requisições
+    time.sleep(2)
+
+    # 4. Resolve outro exemplo
+    res = c.encurta("https://www.ppgcc.ufsc.br")
+    cod = res.get("codigo")
+    print(f"Resolvendo {cod}:", c.resolve(cod))
+
+    # 5. Resolve outro exemplo e mostra cache cheia
+    res = c.encurta("https://www.ine.ufsc.br")
+    cod = res.get("codigo")
+    print(f"Resolvendo {cod}:", c.resolve(cod))
+
+    # 5. Resolve outro exemplo e mostra cache cheia
+    res = c.encurta("https://www.ufsc.br")
+    cod = res.get("codigo")
+    print(f"Resolvendo {cod}:", c.resolve(cod))
+
+    # 5. Resolve outro exemplo e mostra cache cheia
+    #res = c.encurta("https://www.eas.ufsc.br")
+    #cod = res.get("codigo")
+    #print(f"Resolvendo {cod}:", c.resolve(cod))
+
+    # 6. Remove caso 2 e resolve
+    print("Testando remoção:", c.remove_url(cod))
     cod = res.get("codigo")
     print(f"Resolvendo {cod}:", c.resolve(cod))

@@ -60,6 +60,7 @@ class InterceptorProxy:
                 # Tenta o Cache Primeiro
                 cached_url = self.cache.get(codigo)
                 if cached_url:
+                    print(f"[CACHE HIT] Encontrado na CACHE de {codigo} para cached_url.")
                     return {"url_original": cached_url, "fonte": "cache"}
                 
                 # Se Cache Miss, vai ao Servidor
@@ -105,7 +106,7 @@ class InterceptorProxy:
         while True:
             prioridade, ordem_chegada, raw_data, client_conn, addr = self.fila_prioridade.get()
 
-            print(f"[FILA] Processando requisição de {addr} | prioridade={prioridade}")
+            print(f"[FILA] Processando requisição de {addr} | prioridade={prioridade} \n")
 
             try:
                 resposta = self.process_request(raw_data, addr)
@@ -141,7 +142,7 @@ class InterceptorProxy:
 
                 print(
                     f"[FILA] Requisição adicionada | "
-                    f"addr={addr} | prioridade={prioridade} | posição aproximada={self.fila_prioridade.qsize()}"
+                    f"addr={addr} | prioridade={prioridade} | posição aproximada={self.fila_prioridade.qsize()} \n"
                 )
             else:
                 client_conn.close()
