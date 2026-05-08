@@ -5,9 +5,9 @@
 **Universidade:** Universidade Federal de Santa Catarina (UFSC)
 
 **Integrantes do grupo:**
-- Lucas Tomio
-- [NOME 2]
-- [NOME 3]
+- Fernanda Larissa Müller (21202109)
+- Julia Fischer Gazolla (23250586)
+- Lucas Tomio Schwchow (23250585)
 
 ---
 
@@ -21,16 +21,16 @@ O sistema implementa um encurtador de URLs distribuído composto por três compo
 
 - **Servidor REST** (Python/Flask): expõe a API HTTP e mantém os mapeamentos `código curto → URL original` em memória.
 - **Interceptador (proxy)** (Python): atua como middleware. Recebe requisições TCP dos clientes, aplica **Cache-Aside (LRU)** e uma **fila de prioridades** (segundo padrão), e repassa via HTTP ao servidor. É transparente para o servidor — o servidor não sabe que o proxy existe.
-- **Bibliotecas cliente** em **duas linguagens** (Python e JavaScript/Node.js), com a mesma interface (`encurta`, `resolve`, `remove_url`/`removeUrl`) sobre o mesmo protocolo JSON-sobre-TCP.
+- **Bibliotecas cliente** em **duas linguagens** (Python e JavaScript/Node.js), com a mesma interface (`encurta`, `resolve`, `remove_url`) sobre o mesmo protocolo JSON-sobre-TCP.
 
-A heterogeneidade exigida pelo enunciado é satisfeita por terem clientes em duas linguagens diferentes que **interoperam** (URL encurtada por um cliente Python pode ser resolvida pelo cliente JS, e vice-versa).
+A heterogeneidade é satisfeita por implementar clientes em duas linguagens diferentes que **interoperam** (URL encurtada por um cliente Python pode ser resolvida pelo cliente JS, e vice-versa).
 
 ---
 
 ## 2. Decisões de implementação
 
 ### 2.1 Linguagens e dependências
-- **Python 3.10** para servidor, proxy e biblioteca cliente. Servidor usa **Flask** (mais simples que `http.server` e idiomático para REST). Proxy usa **`requests`** para chamar o servidor e biblioteca padrão (`socket`, `threading`, `queue`) para o resto.
+- **Python 3.10** para servidor, proxy e biblioteca cliente. Servidor usa framwork **Flask** (mais simples que `http.server`, idiomático para REST e pela familiaridade técnica da equipe). Proxy usa **`requests`** para chamar o servidor e biblioteca padrão (`socket`, `threading`, `queue`) para o restante.
 - **Node.js 20** para a biblioteca cliente em JavaScript. Sem dependências externas — apenas o módulo nativo `net` (sockets) e `fs` (config).
 
 ### 2.2 Protocolo cliente ↔ proxy
@@ -59,6 +59,7 @@ A campo `"fonte": "cache"` é uma decisão deliberada: permite observar empirica
 
 ### 2.4 Segundo padrão: Fila de Prioridades
 Justificativa da escolha:
+- É um padrão que faz sentido no contexto do projeto de Encurtador de URLs.
 - O proxy recebe três tipos de operação com sensibilidades diferentes a latência:
   - `resolve` (GET) — mais frequente e diretamente percebida pelo usuário.
   - `remove` (DELETE) — afeta coerência do cache; precisa correr antes de `encurta` para não corromper estado.
@@ -216,10 +217,10 @@ Observação importante: `acessos = 1` mesmo após **duas** resoluções pelo cl
 
 ## 6. Conclusões
 
-### 6.1 O que o trabalho mostra
+### 6.1 Resultados obtidos
 - O padrão **Cache-Aside** reduz tráfego ao servidor de forma observável (contador de acessos no servidor cresce só em cache miss).
 - A invalidação ativa do cache no `remove` evita dados obsoletos sem complicação extra.
-- A fila de prioridades introduz fairness entre tipos de requisição com custo baixo (uma thread *worker* + uma fila).
+- A fila de prioridades introduz equidade entre tipos de requisição com custo baixo (uma thread *worker* + uma fila).
 - Heterogeneidade não é uma característica acoplada à linguagem do servidor: o protocolo JSON-sobre-TCP é simples o suficiente para qualquer linguagem com socket nativo implementar (~30 linhas de código no caso de Node.js).
 - Um arquivo `config.txt` montado como volume mostra-se uma estratégia limpa para parametrização sem rebuild.
 
@@ -233,6 +234,6 @@ Observação importante: `acessos = 1` mesmo após **duas** resoluções pelo cl
 - **Servidor em modo `debug=True`:** Flask reinicia ao detectar mudanças no código — bom para desenvolvimento, péssimo para produção (deveria ser WSGI dedicado, ex.: Gunicorn).
 
 ### 6.3 Possíveis extensões
-- Trocar a fila de prioridades por **Circuit Breaker** ou **Rate Limiting** seria igualmente válido. A arquitetura atual permite encaixar um segundo padrão *em série* com a fila atual sem grande refatoração.
+- Trocar a fila de prioridades por **Circuit Breaker** ou **Rate Limiting** seria igualmente válido. A arquitetura atual permite encaixar um segundo padrão *em série* com a fila atual sem grande refatoração e ambos fazem sentido no contexto desse projeto.
 - Persistir o servidor REST em SQLite ou Redis.
 - Adicionar TTL no cache para reduzir a janela de incoerência em casos de falha do `remove`.
