@@ -149,7 +149,6 @@ class InterceptorProxy:
         
 
 if __name__ == '__main__':
-    print("[DEBUG] O interceptador vai iniciar")
     proxy = InterceptorProxy()
     print("[PROXY] Iniciando interceptador...")
     proxy.start()
