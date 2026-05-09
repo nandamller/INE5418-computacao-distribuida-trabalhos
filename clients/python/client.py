@@ -85,12 +85,17 @@ if __name__ == "__main__":
     cod = res.get("codigo")
     print(f"Resolvendo {cod}:", c.resolve(cod))
 
-    # 5. Resolve outro exemplo e mostra cache cheia
-    #res = c.encurta("https://www.eas.ufsc.br")
-    #cod = res.get("codigo")
-    #print(f"Resolvendo {cod}:", c.resolve(cod))
+    # 6. Quinto resolve - enche o cache (cache_capacity=5)
+    res = c.encurta("https://www.eas.ufsc.br")
+    cod = res.get("codigo")
+    print(f"Resolvendo {cod}:", c.resolve(cod))
 
-    # 6. Remove caso 2 e resolve
+    # 7. Sexto resolve - dispara eviction do LRU (esperado log [CACHE] Capacidade atingida)
+    res = c.encurta("https://www.cse.ufsc.br")
+    cod = res.get("codigo")
+    print(f"Resolvendo {cod}:", c.resolve(cod))
+
+    # 8. Remove o último e resolve (esperado erro pós-invalidação)
     print("Testando remoção:", c.remove_url(cod))
     cod = res.get("codigo")
     print(f"Resolvendo {cod}:", c.resolve(cod))

@@ -21,3 +21,9 @@ client_proxy_port=8080
 
 # --- Cache LRU ---
 cache_capacity=5
+
+# --- Demo da fila de prioridades ---
+# Atraso artificial (em segundos) por requisição no proxy. Em produção deve ser 0.
+# Aumentar para ~0.5 ao rodar demos/demo_prioridades.py para tornar visível o
+# reordenamento da fila sob carga.
+demo_delay=0

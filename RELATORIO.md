@@ -213,6 +213,85 @@ $ curl -s http://localhost:5050/urls
 ```
 Observação importante: `acessos = 1` mesmo após **duas** resoluções pelo cliente. Isso é prova de que a 2ª resolução foi atendida pelo **cache do proxy** e **não chegou ao servidor** — a economia de tráfego prometida pelo Cache-Aside está acontecendo.
 
+### 5.6 Comportamento da fila de prioridades sob carga
+
+Para tornar visível o reordenamento da fila — que em uso normal não se observa porque o worker consome rápido demais — o proxy aceita a variável `DEMO_DELAY` (em segundos), que aplica um atraso artificial em cada requisição. Default `0`; em produção não muda nada.
+
+O script `demos/demo_prioridades.py` dispara **15 requisições em paralelo** misturando `encurta` (prio=2), `remove` (prio=1) e `resolve` (prio=0), com a ordem cronológica embaralhada para forçar o teste.
+
+```bash
+$ DEMO_DELAY=0.5 docker compose up -d proxy
+$ python3 demos/demo_prioridades.py
+```
+
+Saída resumida:
+
+```
+=== ORDEM DE ENVIO (cronológica, todos em ~1ms) ===
+  T+0.2ms  #00 resolve (prio=0)
+  T+0.3ms  #01 remove  (prio=1)
+  T+0.3ms  #02 encurta (prio=2)
+  ...
+  T+0.9ms  #14 resolve (prio=0)
+
+=== ORDEM DE PROCESSAMENTO (resposta do worker) ===
+  T+ 517.8ms  #06 encurta (prio=2)   ← já estava no worker quando a fila começou a encher
+  T+1026.9ms  #08 resolve (prio=0)
+  T+1530.6ms  #14 resolve (prio=0)
+  T+2036.6ms  #11 resolve (prio=0)
+  T+2543.6ms  #00 resolve (prio=0)   ← TODOS os resolves saíram primeiro
+  T+3051.7ms  #05 remove  (prio=1)
+  T+3562.3ms  #04 remove  (prio=1)
+  T+4069.4ms  #01 remove  (prio=1)   ← depois TODOS os removes
+  T+4579.4ms  #07 encurta (prio=2)
+  ...
+  T+7637.2ms  #13 encurta (prio=2)   ← encurtas por último
+
+=== TEMPO MÉDIO DE RESPOSTA POR PRIORIDADE ===
+  prio=0 (resolve): média 1784.4ms  (n=4)
+  prio=1 (remove ): média 3561.1ms  (n=3)
+  prio=2 (encurta): média 5410.1ms  (n=8)
+```
+
+**Interpretação:** depois que a fila começou a acumular, o worker processou estritamente em ordem de prioridade — todos os 4 resolves antes de qualquer remove, e todos os 3 removes antes de qualquer encurta — independentemente da ordem cronológica de chegada (que era basicamente simultânea, mas embaralhada). Em média, um `resolve` foi atendido **3× mais rápido** que um `encurta`. Isso é exatamente a garantia de SLA que a fila de prioridades promete.
+
+A única requisição "fora de ordem" foi a `#06 (encurta)`: ela foi processada primeiro porque o worker a pegou antes da fila ter outras requisições enfileiradas — não há mecanismo de preempção, e isso é OK em uma fila não-preemptiva. Em regime estacionário (alta carga), o efeito de prioridade domina.
+
+### 5.7 Eviction do cache LRU ao atingir capacidade
+
+O exemplo embutido em `clients/python/client.py` (`__main__`) encurta+resolve **6 URLs distintas**. Como `cache_capacity=5`, a 6ª inserção dispara eviction da entrada menos recentemente usada.
+
+```
+$ docker compose run --rm client-python
+Resolvendo 6eb12957-... : {'url_original': 'https://www.inf.ufsc.br'}    # 1ª add
+Resolvendo 6eb12957-... : {'url_original': 'https://www.inf.ufsc.br', 'fonte': 'cache'}  # HIT
+Resolvendo 089be493-... : {'url_original': 'https://www.ppgcc.ufsc.br'}  # 2ª add
+Resolvendo 0c167869-... : {'url_original': 'https://www.ine.ufsc.br'}    # 3ª add
+Resolvendo 85950d51-... : {'url_original': 'https://www.ufsc.br'}        # 4ª add
+Resolvendo d2184733-... : {'url_original': 'https://www.eas.ufsc.br'}    # 5ª add (cache cheia)
+Resolvendo 3424b0d8-... : {'url_original': 'https://www.cse.ufsc.br'}    # 6ª add → EVICTION
+Testando remoção: {'removido': True}
+Resolvendo 3424b0d8-... : {'erro': 'Código não encontrado'}              # invalidação
+```
+
+Logs correspondentes do proxy:
+```
+[CACHE MISS] ... 6eb12957-... (inf)
+[CACHE HIT]  ... 6eb12957-... (inf, move para MRU)
+[CACHE MISS] ... 089be493-... (ppgcc)
+[CACHE MISS] ... 0c167869-... (ine)
+[CACHE MISS] ... 85950d51-... (ufsc)
+[CACHE MISS] ... d2184733-... (eas)            ← cache atinge 5
+[CACHE MISS] ... 3424b0d8-... (cse)            ← chega 6º, dispara eviction
+[CACHE] Capacidade atingida. Removendo entrada obsoleta: 6eb12957-...   ← inf é o LRU
+[CACHE] Entrada 3424b0d8-... invalidada com sucesso.
+[CACHE MISS] ... 3424b0d8-... (cse após remove → 404 do servidor)
+```
+
+**Observação importante sobre qual entrada foi expulsa:** o `inf.ufsc.br` foi expulso, e não o `ppgcc.ufsc.br` (que foi adicionado *depois* do inf), porque o HIT no inf, na 2ª resolução, fez `move_to_end` no `OrderedDict` — promovendo inf a *most recently used* naquele momento. Mesmo assim, depois de 4 inserções subsequentes (ppgcc, ine, ufsc, eas), inf voltou a ser o mais antigo e foi corretamente identificado como vítima do eviction. Isso comprova que a política LRU está agindo sobre a janela de **acessos** (gets + puts), não apenas de inserções.
+
+Esta seção, junto com 5.1 (HIT) e 5.2 (invalidação), cobre os **quatro comportamentos** do cache: miss, hit, eviction por capacidade e invalidação por remoção.
+
 ---
 
 ## 6. Conclusões

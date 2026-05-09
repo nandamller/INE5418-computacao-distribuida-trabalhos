@@ -28,6 +28,10 @@ REST_SERVER_URL = os.getenv("REST_SERVER_URL", CONFIG.get("rest_server_url", "ht
 PROXY_HOST = os.getenv("PROXY_BIND_HOST", CONFIG.get("proxy_host", "0.0.0.0"))
 PROXY_PORT = int(os.getenv("PROXY_BIND_PORT", CONFIG.get("proxy_port", "8080")))
 CACHE_CAPACITY = int(os.getenv("CACHE_CAPACITY", CONFIG.get("cache_capacity", "5")))
+# Atraso artificial por requisição (em segundos). Usado apenas para demonstrar a
+# fila de prioridades sob carga: com delay > 0 a fila acumula e a reordenação
+# por prioridade fica observável. Default 0 = comportamento de produção.
+DEMO_DELAY = float(os.getenv("DEMO_DELAY", CONFIG.get("demo_delay", "0")))
 
 # Prioridade definida conforme a ação
 PRIORIDADES = {
@@ -51,6 +55,8 @@ class InterceptorProxy:
 
     def process_request(self, raw_data, client_address):
         """Lógica central: decide entre Cache, API REST ou Bloqueio."""
+        if DEMO_DELAY:
+            time.sleep(DEMO_DELAY)
         try:
             request_json = json.loads(raw_data.decode('utf-8'))
             acao = request_json.get("acao")

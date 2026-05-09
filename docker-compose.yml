@@ -20,6 +20,7 @@ services:
       - server
     environment:
       - PYTHONUNBUFFERED=1
+      - DEMO_DELAY=${DEMO_DELAY:-0}
     volumes:
       - ./config.txt:/proxy/config.txt:ro
     networks:
