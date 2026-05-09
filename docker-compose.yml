@@ -40,7 +40,7 @@ services:
       - distributed-network
 
   client-js:
-    build: ./clientes/javascript
+    build: ./clients/javascript
     depends_on:
       - proxy
     environment:
