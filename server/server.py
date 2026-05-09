@@ -1,6 +1,8 @@
 from flask import Flask, request, jsonify
+
 import os
 import uuid
+import shortuuid
 
 
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
@@ -13,7 +15,7 @@ app = Flask(__name__)
 url_storage = {}
 
 # Base da URL curta (configurável)
-BASE_HOST = f"http://localhost:{SERVER_PORT}/r/"
+BASE_HOST = f"http://host/r/"
 
 @app.route('/urls', methods=['POST'])
 def encurtar_url():
@@ -29,8 +31,8 @@ def encurtar_url():
 
     url_original = data['url']
     
-    # Gera um código curto único usando UUID (6 primeiros caracteres)
-    codigo = str(uuid.uuid4())
+    # Gera um código curto único usando uuid(name=...) para que a mesma URL gere sempre o mesmo ID
+    codigo = shortuuid.uuid(name=url_original)[:8]
     
     # Armazena os dados no dicionário em memória
     url_storage[codigo] = {
