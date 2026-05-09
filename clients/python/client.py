@@ -4,24 +4,10 @@ import json
 import time
 
 
-def _load_config(path="config.txt"):
-    cfg = {}
-    if os.path.exists(path):
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                cfg[k.strip()] = v.strip()
-    return cfg
-
-
 class EncurtadorClient:
     def __init__(self):
-        cfg = _load_config()
-        self.host = os.getenv("PROXY_HOST", cfg.get("client_proxy_host", "proxy"))
-        self.port = int(os.getenv("PROXY_PORT", cfg.get("client_proxy_port", "8080")))
+        self.host = os.getenv("PROXY_HOST", "proxy")
+        self.port = int(os.getenv("PROXY_PORT", "8080"))
 
     def _enviar_comando(self, payload):
         """Método privado para gerenciar a conexão de rede via Sockets Berkeley."""

@@ -1,23 +1,11 @@
 const net = require('net');
 const fs = require('fs');
 
-function loadConfig(path = 'config.txt') {
-  const cfg = {};
-  if (!fs.existsSync(path)) return cfg;
-  for (const line of fs.readFileSync(path, 'utf-8').split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#') || !trimmed.includes('=')) continue;
-    const [k, ...rest] = trimmed.split('=');
-    cfg[k.trim()] = rest.join('=').trim();
-  }
-  return cfg;
-}
 
 class EncurtadorClient {
   constructor() {
-    const cfg = loadConfig();
-    this.host = process.env.PROXY_HOST || cfg.client_proxy_host || 'proxy';
-    this.port = parseInt(process.env.PROXY_PORT || cfg.client_proxy_port || '8080', 10);
+    this.host = process.env.PROXY_HOST || 'proxy';
+    this.port = parseInt(process.env.PROXY_PORT || '8080', 10);
   }
 
   _enviarComando(payload) {

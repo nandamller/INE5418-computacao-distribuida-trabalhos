@@ -3,26 +3,8 @@ import os
 import uuid
 
 
-def load_config(path="config.txt"):
-    cfg = {}
-    if os.path.exists(path):
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                cfg[k.strip()] = v.strip()
-    return cfg
-
-
-def cfg_get(cfg, key, default, env_key=None):
-    return os.getenv(env_key, cfg.get(key, default)) if env_key else cfg.get(key, default)
-
-
-CONFIG = load_config()
-SERVER_HOST = cfg_get(CONFIG, "server_host", "0.0.0.0", "SERVER_HOST")
-SERVER_PORT = int(cfg_get(CONFIG, "server_port", "5000", "SERVER_PORT"))
+SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
+SERVER_PORT = int(os.getenv("SERVER_PORT", "5000"))
 
 app = Flask(__name__)
 

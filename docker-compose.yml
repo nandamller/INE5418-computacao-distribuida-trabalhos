@@ -5,8 +5,9 @@ services:
     restart: always
     ports:
       - "5050:5000"
-    volumes:
-      - ./config.txt:/server/config.txt:ro
+    environment:
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=5000
     networks:
       - distributed-network
 
@@ -21,8 +22,10 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DEMO_DELAY=${DEMO_DELAY:-0}
-    volumes:
-      - ./config.txt:/proxy/config.txt:ro
+      - REST_SERVER_URL=http://server:5000/urls
+      - PROXY_BIND_HOST=0.0.0.0
+      - PROXY_BIND_PORT=8080
+      - CACHE_CAPACITY=5
     networks:
       - distributed-network
 
@@ -30,8 +33,9 @@ services:
     build: ./clients/python
     depends_on:
       - proxy
-    volumes:
-      - ./config.txt:/client/config.txt:ro
+    environment:
+      - PROXY_HOST=proxy
+      - PROXY_PORT=8080
     networks:
       - distributed-network
 
@@ -39,8 +43,9 @@ services:
     build: ./clientes/javascript
     depends_on:
       - proxy
-    volumes:
-      - ./config.txt:/client/config.txt:ro
+    environment:
+      - PROXY_HOST=proxy
+      - PROXY_PORT=8080
     networks:
       - distributed-network
 
