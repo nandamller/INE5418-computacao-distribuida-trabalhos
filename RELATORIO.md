@@ -13,147 +13,115 @@
 
 ## 1. Visão geral
 
-O sistema implementa um encurtador de URLs distribuído composto por três componentes independentes:
+Encurtador de URLs distribuído com três componentes que se comunicam por protocolos diferentes:
 
 ```
-[Clientes (Python / JavaScript)] --TCP/JSON--> [Interceptador (proxy)] --HTTP/REST--> [Servidor REST]
+[Clientes Python / JavaScript] --sockets TCP/JSON--> [Interceptador] --HTTP/REST--> [Servidor REST]
 ```
 
-- **Servidor REST** (Python/Flask): expõe a API HTTP e mantém os mapeamentos `código curto → URL original` em memória.
-- **Interceptador (proxy)** (Python): atua como middleware. Recebe requisições TCP dos clientes, aplica **Cache-Aside (LRU)** e uma **fila de prioridades** (segundo padrão), e repassa via HTTP ao servidor. É transparente para o servidor — o servidor não sabe que o proxy existe.
-- **Bibliotecas cliente** em **duas linguagens** (Python e JavaScript/Node.js), com a mesma interface (`encurta`, `resolve`, `remove_url`) sobre o mesmo protocolo JSON-sobre-TCP.
+- **Servidor REST** (Python/Flask): endpoints HTTP e armazenamento em dicionário em memória.
+- **Interceptador (proxy)** (Python): recebe TCP dos clientes, aplica Cache-Aside (LRU) e Fila de Prioridades, repassa por HTTP ao servidor. O servidor não sabe que o proxy existe.
+- **Bibliotecas cliente** em Python e em JavaScript/Node.js, mesma interface (`encurta`, `resolve`, `remove`) sobre o mesmo protocolo JSON/TCP — atende ao requisito de heterogeneidade.
 
-A heterogeneidade é satisfeita por implementar clientes em duas linguagens diferentes que **interoperam** (URL encurtada por um cliente Python pode ser resolvida pelo cliente JS, e vice-versa).
+Tudo roda em containers Docker orquestrados por `docker-compose.yml`.
 
 ---
 
 ## 2. Decisões de implementação
 
-### 2.1 Linguagens e dependências
-- **Python 3.10** para servidor, proxy e biblioteca cliente. Servidor usa framwork **Flask** (mais simples que `http.server`, idiomático para REST e pela familiaridade técnica da equipe). Proxy usa **`requests`** para chamar o servidor e biblioteca padrão (`socket`, `threading`, `queue`) para o restante.
-- **Node.js 20** para a biblioteca cliente em JavaScript. Sem dependências externas — apenas o módulo nativo `net` (sockets) e `fs` (config).
+### 2.1 Linguagens
+
+- **Python 3.10** no servidor, no proxy e em uma das bibliotecas cliente. Familiaridade da equipe e disponibilidade direta de `socket`, `threading` e `queue` na stdlib.
+  - Servidor: Flask para os endpoints; `shortuuid` para gerar códigos.
+  - Proxy: `requests` para falar com o servidor; sockets e threading da stdlib.
+- **Node.js 20** na segunda biblioteca cliente, sem dependências externas (só o módulo nativo `net`).
 
 ### 2.2 Protocolo cliente ↔ proxy
-JSON sobre TCP, uma requisição por conexão:
 
-```jsonc
+JSON sobre TCP, uma requisição por conexão.
+
+```
 // requisições
-{"acao": "encurta", "url": "https://..."}
+{"acao": "encurta", "url": "..."}
 {"acao": "resolve", "codigo": "..."}
 {"acao": "remove",  "codigo": "..."}
 
 // respostas
-{"codigo": "...", "url_curta": "..."}      // encurta
-{"url_original": "..."}                     // resolve (cache miss)
-{"url_original": "...", "fonte": "cache"}   // resolve (cache hit) ← marcador útil para depuração
-{"removido": true}                          // remove
-{"erro": "..."}                             // qualquer falha
+{"codigo": "...", "url_curta": "..."}        // encurta
+{"url_original": "..."}                       // resolve (miss)
+{"url_original": "...", "fonte": "cache"}     // resolve (hit)
+{"removido": true}                            // remove
+{"erro": "..."}                               // falha
 ```
 
-A campo `"fonte": "cache"` é uma decisão deliberada: permite observar empiricamente quando o cache está atendendo a requisição, sem precisar inspecionar logs do proxy.
+O campo `"fonte": "cache"` é uma adição nossa para observar o cache em ação sem precisar inspecionar logs do proxy.
 
 ### 2.3 Cache-Aside com política LRU (`proxy/cache_aside.py`)
-- Estrutura: `collections.OrderedDict`. Cada `get` faz `move_to_end`; `put` insere no fim e remove o início (`popitem(last=False)`) quando excede a capacidade.
-- **Política de invalidação:** ao receber `remove`, o proxy primeiro encaminha o `DELETE` ao servidor REST e, em caso de sucesso, chama `cache.invalidate(codigo)`. Isso garante coerência: se o servidor falhar, o cache não é invalidado, evitando inconsistência transitória.
-- **Capacidade configurável** (`cache_capacity` no `config.txt`, padrão 5).
+
+Classe `LRUCache` baseada em `collections.OrderedDict`. `get` faz `move_to_end` ao acessar; `put` insere no fim e remove o início (`popitem(last=False)`) ao exceder a capacidade; `invalidate` remove uma chave específica. Capacidade configurável via `CACHE_CAPACITY` (padrão 5).
+
+Sobre **coerência**: o proxy só invalida o cache **depois** que o `DELETE` no servidor retorna sucesso. Se a chamada HTTP falhar, a entrada antiga permanece no cache. Evita inconsistência transitória ("cliente acha que removeu mas o servidor ainda tem"), em troca de aceitar uma janela curta de dados desatualizados em caso de falha de rede.
 
 ### 2.4 Segundo padrão: Fila de Prioridades
-Justificativa da escolha:
-- É um padrão que faz sentido no contexto do projeto de Encurtador de URLs.
-- O proxy recebe três tipos de operação com sensibilidades diferentes a latência:
-  - `resolve` (GET) — mais frequente e diretamente percebida pelo usuário.
-  - `remove` (DELETE) — afeta coerência do cache; precisa correr antes de `encurta` para não corromper estado.
-  - `encurta` (POST) — pode tolerar atraso.
-- Implementação: `queue.PriorityQueue` com prioridades `resolve=0`, `remove=1`, `encurta=2` (menor número = atendido antes). Uma thread *worker* daemon consome a fila enquanto a thread principal aceita conexões.
-- O padrão é discutido em [Microsoft Azure – Priority Queue Pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/priority-queue) como mecanismo para **garantir SLA de operações sensíveis quando há contenção**.
-- Por que não Circuit Breaker ou Throttling: ambos são úteis principalmente em cenários de falha do servidor / sobrecarga de rede; o problema mais natural neste sistema é dar resposta rápida a `resolve` quando há muitas inserções concorrentes — exatamente o que a fila de prioridades resolve.
 
-### 2.5 Configuração centralizada
-O arquivo `config.txt` na raiz do projeto é a fonte única da verdade para parâmetros de runtime. Ele é montado como volume `read-only` em todos os containers (`docker-compose.yml`), de modo que **alterar o arquivo + reiniciar o serviço aplica sem rebuild**. Precedência adotada:
+**Justificativa da escolha.** O proxy recebe três tipos de operação com sensibilidades diferentes a latência:
 
-```
-variável de ambiente  >  config.txt  >  default no código
-```
+- `resolve` (GET) — operação mais frequente e a que o usuário final percebe diretamente.
+- `remove` (DELETE) — afeta coerência do cache; vale rodar antes dos `encurta`.
+- `encurta` (POST) — tolera atraso. Ninguém colando uma URL pra encurtar nota 200ms a mais.
 
-Variáveis de ambiente continuam disponíveis como *escape hatch* (ex.: rodar o cliente fora do Docker apontando para `localhost`).
+**Implementação:** uma `queue.PriorityQueue` armazena tuplas `(prioridade, ordem_chegada, ...)`. Uma thread worker daemon consome a fila; a thread principal só aceita conexões e enfileira. Prioridades: `resolve=0`, `remove=1`, `encurta=2`.
 
-### 2.6 Independência do servidor
-O servidor REST não tem qualquer conhecimento do proxy. Ele aceita requisições HTTP de quem quer que o alcance — o que satisfaz o requisito do enunciado de que "o interceptador deve ser transparente para o servidor".
+Em uso normal a fila quase nunca acumula e o efeito é invisível. Para evidenciar o padrão durante a demo, criamos a variável de ambiente `DEMO_DELAY` no proxy, que insere um atraso artificial em cada requisição (default 0). Detalhes na seção 4.4.
 
-### 2.7 Identificação de códigos curtos
-UUID v4 (`uuid.uuid4()`). Decisão pragmática: garante unicidade sem coordenação distribuída e elimina a necessidade de detecção de colisão. Tradeoff: códigos longos (~36 chars). Em sistema real provavelmente usaríamos hash truncado + verificação de colisão.
+Avaliamos Circuit Breaker e Throttling como alternativas; ambos são padrões reativos (a falha do servidor ou abuso externo) e o problema mais natural deste sistema é dar resposta rápida a `resolve` mesmo sob contenção, que é o que a fila resolve.
+
+### 2.5 Configuração via variáveis de ambiente
+
+Todos os parâmetros de runtime (portas, URL do servidor vista pelo proxy, capacidade do cache, `DEMO_DELAY`) são lidos de variáveis de ambiente declaradas no `docker-compose.yml`, com defaults sensatos no código. Alterar um parâmetro não exige rebuild de imagem — só reiniciar o serviço com a nova env.
+
+### 2.6 Identificação de códigos curtos
+
+`shortuuid.uuid(name=url)[:8]` — 8 caracteres derivados de hash da URL. A mesma URL gera sempre o mesmo código (idempotência), evitando duplicatas no `url_storage`. Trocamos da escolha inicial (UUID v4 aleatório, 36 chars) porque códigos longos poluíam logs e exemplos.
 
 ---
 
-## 3. Estrutura do projeto
+## 3. Como compilar e executar
 
-```
-Encurtador-de-URLs-Distribuido/
-├── config.txt                       # configuração centralizada
-├── docker-compose.yml               # orquestração dos 4 serviços
-├── server/                          # API REST (Flask)
-│   ├── server.py
-│   ├── requirements.txt
-│   └── Dockerfile
-├── proxy/                           # Interceptador (TCP + cache + fila)
-│   ├── proxy.py
-│   ├── cache_aside.py
-│   ├── requirements.txt
-│   └── Dockerfile
-├── clients/python/                  # Biblioteca cliente em Python
-│   ├── client.py
-│   ├── requirements.txt
-│   └── Dockerfile
-└── clientes/javascript/             # Biblioteca cliente em JavaScript
-    ├── client.js
-    ├── example.js
-    ├── package.json
-    └── Dockerfile
-```
+Instruções completas, com troubleshooting e descrição de cada componente, estão no **`README.md`** na raiz do projeto. Resumo:
 
----
-
-## 4. Como compilar e executar
-
-### 4.1 Pré-requisitos
-- Docker Desktop (ou Docker Engine + Docker Compose v2).
-- macOS: porta 5000 ocupada pelo AirPlay Receiver — por isso o servidor é exposto no host na porta **5050** (interna 5000).
-
-### 4.2 Subir o sistema completo
 ```bash
 docker compose up --build
 ```
-Isso constrói as 4 imagens (server, proxy, client-python, client-js) e sobe a stack. Os clientes executam um exemplo automático e encerram; servidor e proxy ficam rodando.
 
-### 4.3 Acessar do host
-- Servidor REST: `http://localhost:5050/urls`
-- Proxy TCP: `localhost:8080`
+Sobe os 4 serviços (server, proxy, client-python, client-js). Os dois clientes executam um exemplo automático e encerram; servidor e proxy ficam rodando.
 
-### 4.4 Rodar o cliente Python contra a stack
+Rodar um cliente isoladamente:
 ```bash
-docker compose run --rm client-python python -c "
-from client import EncurtadorClient
-c = EncurtadorClient()
-print(c.encurta('https://www.ufsc.br'))
-"
-```
-
-### 4.5 Rodar o cliente JavaScript contra a stack
-```bash
+docker compose run --rm client-python
 docker compose run --rm client-js
-# ou: docker compose run --rm client-js node example.js
 ```
 
-### 4.6 Derrubar
+Bater direto na API REST (sem passar pelo proxy):
+```bash
+curl http://localhost:5050/urls
+```
+
+Encerrar:
 ```bash
 docker compose down
 ```
 
+**macOS:** a porta 5000 é ocupada pelo AirPlay Receiver, por isso o host mapeia 5050 → 5000 do container do servidor.
+
 ---
 
-## 5. Exemplos de saídas de execução
+## 4. Exemplos de saídas de execução
 
-### 5.1 Cache HIT (Python)
+Códigos curtos abaixo são valores reais retornados pelo sistema (8 caracteres `shortuuid`).
+
+### 4.1 Cache HIT no `resolve`
+
 ```
 $ docker compose run --rm client-python python -c "
 from client import EncurtadorClient
@@ -165,154 +133,97 @@ print('2a:', c.resolve(cod))
 1a: {'url_original': 'https://example.com'}
 2a: {'url_original': 'https://example.com', 'fonte': 'cache'}
 ```
-Logs do proxy correspondentes (`docker compose logs proxy`):
+
+A 2ª resolução vem com `"fonte": "cache"` e os logs do proxy mostram `[CACHE HIT]` sem novo `[CACHE MISS]` — não houve chamada HTTP ao servidor.
+
+### 4.2 Invalidação no `remove` + eviction LRU (cliente Python completo)
+
+O `__main__` do `clients/python/client.py` executa um ciclo completo: encurta + resolve para 6 URLs distintas, depois remove a última. Como `CACHE_CAPACITY=5`, a 6ª inserção dispara eviction. Logs do proxy resumidos:
+
 ```
-[FILA] Processando requisição de (172.18.0.4, ...) | prioridade=0
-[CACHE MISS] Consultando servidor REST para 7cb02c29-...
-[FILA] Processando requisição de (172.18.0.4, ...) | prioridade=0
-# (sem CACHE MISS na 2a — atendeu pelo cache local)
+[CACHE MISS] ... 6eb12957 (inf)
+[CACHE HIT]  ... 6eb12957 (inf, move para MRU)
+[CACHE MISS] ... 089be493 (ppgcc)
+[CACHE MISS] ... 0c167869 (ine)
+[CACHE MISS] ... 85950d51 (ufsc)
+[CACHE MISS] ... d2184733 (eas)     ← cache atinge 5
+[CACHE MISS] ... 3424b0d8 (cse)     ← chega 6º, dispara eviction
+[CACHE] Capacidade atingida. Removendo entrada obsoleta: 6eb12957
+[CACHE] Entrada 3424b0d8 invalidada com sucesso.
+[CACHE MISS] ... 3424b0d8 (cse após remove → 404 do servidor)
 ```
 
-### 5.2 Invalidação de cache (JS)
-```
-$ docker compose run --rm client-js node -e "..."
-1a:        { url_original: 'https://test2.config' }
-2a HIT:    { url_original: 'https://test2.config', fonte: 'cache' }
-rm:        { removido: true }
-apos rm:   { erro: 'Código não encontrado' }
-```
-A 4ª chamada não encontrou no cache (porque `remove` invalidou) e o servidor já tinha apagado a entrada — exatamente a coerência exigida pelo enunciado.
+Observação: o `inf.ufsc.br` foi expulso, e não o `ppgcc.ufsc.br` que entrou depois — porque o HIT no inf chamou `move_to_end`, e depois ele voltou a ser o mais antigo após 4 inserções. Confirma que o LRU age sobre a janela de **acessos** (gets + puts), não só de inserções.
 
-### 5.3 Heterogeneidade — interop Python/JS
-Sequência: **Python encurta → JS resolve → JS remove → Python tenta resolver**.
-```
-Codigo gerado pelo Python: 826da07c-879b-4b73-b64a-9b713fec51f9
-JS resolveu:                   { url_original: 'https://heterogeneidade.test' }
-JS resolveu de novo (HIT):     { url_original: 'https://heterogeneidade.test', fonte: 'cache' }
-JS removeu:                    { removido: true }
-Python resolveu (apos remove): {'erro': 'Código não encontrado'}
-```
-Confirma que o estado (URLs no servidor + cache no proxy) é compartilhado entre clientes de linguagens diferentes.
+Junto com 4.1, esta seção cobre os 4 comportamentos do cache: miss, hit, eviction e invalidação.
 
-### 5.4 Mudança de parâmetro via `config.txt`
-Editando `cache_capacity=5 → 99` e reiniciando o proxy:
-```
-$ docker compose restart proxy
-$ docker compose exec proxy python -c "import proxy; print(proxy.CACHE_CAPACITY)"
-99
-```
-Sem rebuild de imagem — confirma que `config.txt` é fonte única da verdade.
+### 4.3 Heterogeneidade — interoperação Python ↔ JavaScript
 
-### 5.5 Listagem com contador de acessos (servidor)
+Python encurta, JS resolve o mesmo código, JS remove, Python tenta resolver de novo:
+
 ```
-$ curl -s http://localhost:5050/urls
-[
-  {"acessos": 1, "codigo": "...", "url_original": "https://example.com"},
-  ...
-]
+Codigo gerado pelo Python: 826da07c
+JS resolveu:               { url_original: 'https://heterogeneidade.test' }
+JS resolveu de novo (HIT): { url_original: 'https://heterogeneidade.test', fonte: 'cache' }
+JS removeu:                { removido: true }
+Python resolveu de volta:  {'erro': 'Código não encontrado'}
 ```
-Observação importante: `acessos = 1` mesmo após **duas** resoluções pelo cliente. Isso é prova de que a 2ª resolução foi atendida pelo **cache do proxy** e **não chegou ao servidor** — a economia de tráfego prometida pelo Cache-Aside está acontecendo.
 
-### 5.6 Comportamento da fila de prioridades sob carga
+O HIT do JS foi sobre uma entrada criada pelo Python: o cache do proxy é único e compartilhado entre clientes de qualquer linguagem.
 
-Para tornar visível o reordenamento da fila — que em uso normal não se observa porque o worker consome rápido demais — o proxy aceita a variável `DEMO_DELAY` (em segundos), que aplica um atraso artificial em cada requisição. Default `0`; em produção não muda nada.
+### 4.4 Fila de Prioridades sob carga — variação de parâmetro
 
-O script `demos/demo_prioridades.py` dispara **15 requisições em paralelo** misturando `encurta` (prio=2), `remove` (prio=1) e `resolve` (prio=0), com a ordem cronológica embaralhada para forçar o teste.
+Subindo o proxy com `DEMO_DELAY=0.5` (atraso de 500ms por requisição) e rodando o script `demos/demo_prioridades.py`, que abre 15 conexões TCP em paralelo misturando os 3 tipos de operação em ordem cronológica embaralhada:
 
 ```bash
 $ DEMO_DELAY=0.5 docker compose up -d proxy
 $ python3 demos/demo_prioridades.py
 ```
 
-Saída resumida:
-
 ```
-=== ORDEM DE ENVIO (cronológica, todos em ~1ms) ===
-  T+0.2ms  #00 resolve (prio=0)
-  T+0.3ms  #01 remove  (prio=1)
-  T+0.3ms  #02 encurta (prio=2)
-  ...
-  T+0.9ms  #14 resolve (prio=0)
-
 === ORDEM DE PROCESSAMENTO (resposta do worker) ===
-  T+ 517.8ms  #06 encurta (prio=2)   ← já estava no worker quando a fila começou a encher
-  T+1026.9ms  #08 resolve (prio=0)
-  T+1530.6ms  #14 resolve (prio=0)
-  T+2036.6ms  #11 resolve (prio=0)
-  T+2543.6ms  #00 resolve (prio=0)   ← TODOS os resolves saíram primeiro
-  T+3051.7ms  #05 remove  (prio=1)
-  T+3562.3ms  #04 remove  (prio=1)
-  T+4069.4ms  #01 remove  (prio=1)   ← depois TODOS os removes
-  T+4579.4ms  #07 encurta (prio=2)
+  T+ 517.8ms  #06  encurta (prio=2)  ← estava no worker quando a fila começou a encher
+  T+1026.9ms  #08  resolve (prio=0)
+  T+1530.6ms  #14  resolve (prio=0)
+  T+2036.6ms  #11  resolve (prio=0)
+  T+2543.6ms  #00  resolve (prio=0)  ← TODOS os resolves saíram antes
+  T+3051.7ms  #05  remove  (prio=1)
+  T+3562.3ms  #04  remove  (prio=1)
+  T+4069.4ms  #01  remove  (prio=1)  ← depois TODOS os removes
+  T+4579.4ms  #07  encurta (prio=2)
   ...
-  T+7637.2ms  #13 encurta (prio=2)   ← encurtas por último
+  T+7637.2ms  #13  encurta (prio=2)  ← encurtas por último
 
-=== TEMPO MÉDIO DE RESPOSTA POR PRIORIDADE ===
-  prio=0 (resolve): média 1784.4ms  (n=4)
-  prio=1 (remove ): média 3561.1ms  (n=3)
-  prio=2 (encurta): média 5410.1ms  (n=8)
+=== TEMPO MÉDIO POR PRIORIDADE ===
+  prio=0 (resolve): 1784.4ms  (n=4)
+  prio=1 (remove ): 3561.1ms  (n=3)
+  prio=2 (encurta): 5410.1ms  (n=8)
 ```
 
-**Interpretação:** depois que a fila começou a acumular, o worker processou estritamente em ordem de prioridade — todos os 4 resolves antes de qualquer remove, e todos os 3 removes antes de qualquer encurta — independentemente da ordem cronológica de chegada (que era basicamente simultânea, mas embaralhada). Em média, um `resolve` foi atendido **3× mais rápido** que um `encurta`. Isso é exatamente a garantia de SLA que a fila de prioridades promete.
+Depois que a fila começou a acumular, o worker processou estritamente em ordem de prioridade. Em média, um `resolve` foi atendido **3× mais rápido** que um `encurta` apesar de terem chegado todos no mesmo intervalo de ~1ms.
 
-A única requisição "fora de ordem" foi a `#06 (encurta)`: ela foi processada primeiro porque o worker a pegou antes da fila ter outras requisições enfileiradas — não há mecanismo de preempção, e isso é OK em uma fila não-preemptiva. Em regime estacionário (alta carga), o efeito de prioridade domina.
+A única "fora de ordem" foi a `#06` (encurta processada primeiro): chegou quando a fila ainda estava vazia e o worker a pegou imediatamente. Como a implementação não é preemptiva (não interrompemos uma requisição em andamento para atender uma de prioridade maior), isso é esperado — em carga estacionária o efeito de prioridade domina.
 
-### 5.7 Eviction do cache LRU ao atingir capacidade
+### 4.5 Variar o tamanho do cache
 
-O exemplo embutido em `clients/python/client.py` (`__main__`) encurta+resolve **6 URLs distintas**. Como `cache_capacity=5`, a 6ª inserção dispara eviction da entrada menos recentemente usada.
+Demonstra mudança de parametrização sem rebuild:
 
-```
-$ docker compose run --rm client-python
-Resolvendo 6eb12957-... : {'url_original': 'https://www.inf.ufsc.br'}    # 1ª add
-Resolvendo 6eb12957-... : {'url_original': 'https://www.inf.ufsc.br', 'fonte': 'cache'}  # HIT
-Resolvendo 089be493-... : {'url_original': 'https://www.ppgcc.ufsc.br'}  # 2ª add
-Resolvendo 0c167869-... : {'url_original': 'https://www.ine.ufsc.br'}    # 3ª add
-Resolvendo 85950d51-... : {'url_original': 'https://www.ufsc.br'}        # 4ª add
-Resolvendo d2184733-... : {'url_original': 'https://www.eas.ufsc.br'}    # 5ª add (cache cheia)
-Resolvendo 3424b0d8-... : {'url_original': 'https://www.cse.ufsc.br'}    # 6ª add → EVICTION
-Testando remoção: {'removido': True}
-Resolvendo 3424b0d8-... : {'erro': 'Código não encontrado'}              # invalidação
+```bash
+$ CACHE_CAPACITY=20 docker compose up -d proxy
+$ docker compose exec proxy python -c "import proxy; print(proxy.CACHE_CAPACITY)"
+20
 ```
 
-Logs correspondentes do proxy:
-```
-[CACHE MISS] ... 6eb12957-... (inf)
-[CACHE HIT]  ... 6eb12957-... (inf, move para MRU)
-[CACHE MISS] ... 089be493-... (ppgcc)
-[CACHE MISS] ... 0c167869-... (ine)
-[CACHE MISS] ... 85950d51-... (ufsc)
-[CACHE MISS] ... d2184733-... (eas)            ← cache atinge 5
-[CACHE MISS] ... 3424b0d8-... (cse)            ← chega 6º, dispara eviction
-[CACHE] Capacidade atingida. Removendo entrada obsoleta: 6eb12957-...   ← inf é o LRU
-[CACHE] Entrada 3424b0d8-... invalidada com sucesso.
-[CACHE MISS] ... 3424b0d8-... (cse após remove → 404 do servidor)
-```
-
-**Observação importante sobre qual entrada foi expulsa:** o `inf.ufsc.br` foi expulso, e não o `ppgcc.ufsc.br` (que foi adicionado *depois* do inf), porque o HIT no inf, na 2ª resolução, fez `move_to_end` no `OrderedDict` — promovendo inf a *most recently used* naquele momento. Mesmo assim, depois de 4 inserções subsequentes (ppgcc, ine, ufsc, eas), inf voltou a ser o mais antigo e foi corretamente identificado como vítima do eviction. Isso comprova que a política LRU está agindo sobre a janela de **acessos** (gets + puts), não apenas de inserções.
-
-Esta seção, junto com 5.1 (HIT) e 5.2 (invalidação), cobre os **quatro comportamentos** do cache: miss, hit, eviction por capacidade e invalidação por remoção.
+Com capacidade 20, o cenário da seção 4.2 não dispararia eviction (só 6 inserções). O mesmo vale para `REST_SERVER_URL`, `PROXY_BIND_PORT` e `DEMO_DELAY`.
 
 ---
 
-## 6. Conclusões
+## 5. Conclusões e limitações
 
-### 6.1 Resultados obtidos
-- O padrão **Cache-Aside** reduz tráfego ao servidor de forma observável (contador de acessos no servidor cresce só em cache miss).
-- A invalidação ativa do cache no `remove` evita dados obsoletos sem complicação extra.
-- A fila de prioridades introduz equidade entre tipos de requisição com custo baixo (uma thread *worker* + uma fila).
-- Heterogeneidade não é uma característica acoplada à linguagem do servidor: o protocolo JSON-sobre-TCP é simples o suficiente para qualquer linguagem com socket nativo implementar (~30 linhas de código no caso de Node.js).
-- Um arquivo `config.txt` montado como volume mostra-se uma estratégia limpa para parametrização sem rebuild.
+### 5.1 Conclusões
 
-### 6.2 Limitações observadas
-- **Armazenamento volátil:** o servidor REST guarda URLs em memória — reiniciar perde tudo. Suficiente para o exercício, mas inadequado para produção.
-- **Cache só no proxy / instância única:** em deployment multi-proxy, cada réplica teria seu próprio cache, podendo retornar versões diferentes para a mesma URL. Solução real: cache distribuído (Redis) ou esquema *cache-coherence* baseado em pub/sub.
-- **Conexão TCP não persistente:** cada chamada do cliente abre + fecha um socket. Para alta carga seria interessante manter pool de conexões ou usar WebSocket / gRPC.
-- **Sem autenticação ou rate limiting global:** qualquer um pode encurtar/remover. A fila de prioridades trata fairness *interna*, não abuso *externo*.
-- **Sem TTL no cache:** uma URL atualizada diretamente no servidor (via `curl`) não invalida o cache automaticamente. Como toda mutação passa pelo proxy no fluxo normal, isso só seria problema em deployments com múltiplos pontos de escrita.
-- **`recv(1024)` no proxy** assume que toda requisição cabe em 1024 bytes. URLs muito longas poderiam ser truncadas. Para produção, ler até delimitador (newline) ou usar prefixo de tamanho.
-- **Servidor em modo `debug=True`:** Flask reinicia ao detectar mudanças no código — bom para desenvolvimento, péssimo para produção (deveria ser WSGI dedicado, ex.: Gunicorn).
-
-### 6.3 Possíveis extensões
-- Trocar a fila de prioridades por **Circuit Breaker** ou **Rate Limiting** seria igualmente válido. A arquitetura atual permite encaixar um segundo padrão *em série* com a fila atual sem grande refatoração e ambos fazem sentido no contexto desse projeto.
-- Persistir o servidor REST em SQLite ou Redis.
-- Adicionar TTL no cache para reduzir a janela de incoerência em casos de falha do `remove`.
+- **Cache-Aside reduz tráfego ao servidor de forma mensurável.** O contador `acessos` no servidor só incrementa em cache miss; as resoluções servidas pelo cache não chegam ao servidor.
+- **A invalidação no `remove` mantém coerência sem complicação** — uma única chamada `cache.invalidate(codigo)` depois do DELETE bem-sucedido.
+- **A fila de prioridades introduz equidade entre tipos de requisição com custo baixo.** No teste sob carga, `resolve` foi atendido em média 3× mais rápido que `encurta`.
+- **Heterogeneidade não é uma propriedade do servidor.** O protocolo JSON/TCP é simples o bastante para qualquer linguagem com socket nativo implementar uma biblioteca em ~30 linhas.
+- **O cache do proxy é único e compartilhado** entre todos os clientes, independente da linguagem — comprovado pelo teste em que uma entrada criada pelo cliente JS foi expulsa pelo LRU disparado por inserções do cliente Python.

@@ -58,7 +58,7 @@ def resolver_url(codigo):
         # Incrementa o contador de acessos
         url_storage[codigo]["acessos"] += 1
 
-        print(f"[SERVIDOR] URL do código {codigo} foi removida!")
+        print(f"[SERVIDOR] URL do código {codigo} foi resolvida!")
         return jsonify({
             "url_original": url_storage[codigo]["url_original"]
         }), 200
