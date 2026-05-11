@@ -43,15 +43,15 @@ if __name__ == "__main__":
     c = EncurtadorClient()
     
     # 1. Encurta
-    print("Testando Encurta:", c.encurta("https://www.ufsc.br"))
+    print("[CLIENT|Py] Testando Encurta:", c.encurta("https://www.ufsc.br"))
     
     # 2. Encurta e resolve, que também adiciona na cache
     res = c.encurta("https://www.inf.ufsc.br")
     cod = res.get("codigo")
-    print(f"Resolvendo {cod}:", c.resolve(cod))
+    print(f"[CLIENT|Py] Resolvendo {cod}:", c.resolve(cod))
     
     # 3. Cache hit
-    print(f"Resolvendo {cod}:", c.resolve(cod))
+    print(f"[CLIENT|Py] Resolvendo {cod}:", c.resolve(cod))
 
     # Tempo para outro cliente processar requisições
     time.sleep(2)
@@ -59,29 +59,29 @@ if __name__ == "__main__":
     # 4. Resolve outro exemplo
     res = c.encurta("https://www.ppgcc.ufsc.br")
     cod = res.get("codigo")
-    print(f"Resolvendo {cod}:", c.resolve(cod))
+    print(f"[CLIENT|Py] Resolvendo {cod}:", c.resolve(cod))
 
     # 5. Resolve outro exemplo e mostra cache cheia
     res = c.encurta("https://www.ine.ufsc.br")
     cod = res.get("codigo")
-    print(f"Resolvendo {cod}:", c.resolve(cod))
+    print(f"[CLIENT|Py] Resolvendo {cod}:", c.resolve(cod))
 
     # 5. Resolve outro exemplo e mostra cache cheia
     res = c.encurta("https://www.ufsc.br")
     cod = res.get("codigo")
-    print(f"Resolvendo {cod}:", c.resolve(cod))
+    print(f"[CLIENT|Py] Resolvendo {cod}:", c.resolve(cod))
 
     # 6. Quinto resolve - enche o cache (cache_capacity=5)
     res = c.encurta("https://www.eas.ufsc.br")
     cod = res.get("codigo")
-    print(f"Resolvendo {cod}:", c.resolve(cod))
+    print(f"[CLIENT|Py] Resolvendo {cod}:", c.resolve(cod))
 
     # 7. Sexto resolve - dispara eviction do LRU (esperado log [CACHE] Capacidade atingida)
     res = c.encurta("https://www.cse.ufsc.br")
     cod = res.get("codigo")
-    print(f"Resolvendo {cod}:", c.resolve(cod))
+    print(f"[CLIENT|Py] Resolvendo {cod}:", c.resolve(cod))
 
     # 8. Remove o último e resolve (esperado erro pós-invalidação)
-    print("Testando remoção:", c.remove_url(cod))
+    print("[CLIENT|Py] Testando remoção:", c.remove_url(cod))
     cod = res.get("codigo")
-    print(f"Resolvendo {cod}:", c.resolve(cod))
+    print(f"[CLIENT|Py] Resolvendo {cod}:", c.resolve(cod))

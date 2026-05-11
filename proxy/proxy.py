@@ -97,7 +97,7 @@ class InterceptorProxy:
         while True:
             prioridade, ordem_chegada, raw_data, client_conn, addr = self.fila_prioridade.get()
 
-            print(f"[FILA] Processando requisição de {addr} | prioridade={prioridade} \n")
+            print(f"[FILA] Processando requisição de {addr} | prioridade={prioridade}")
 
             try:
                 resposta = self.process_request(raw_data, addr)
@@ -118,7 +118,7 @@ class InterceptorProxy:
 
         while True:
             client_conn, addr = server_socket.accept()
-            print(f"\n[PROXY] Conexão recebida de {addr}")
+            print(f"[PROXY] Conexão recebida de {addr}")
             
             data = client_conn.recv(1024)
             if data:
@@ -133,7 +133,7 @@ class InterceptorProxy:
 
                 print(
                     f"[FILA] Requisição adicionada | "
-                    f"addr={addr} | prioridade={prioridade} | posição aproximada={self.fila_prioridade.qsize()} \n"
+                    f"addr={addr} | prioridade={prioridade} | posição aproximada={self.fila_prioridade.qsize()}"
                 )
             else:
                 client_conn.close()
