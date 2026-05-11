@@ -1,7 +1,7 @@
 # Relatório – Trabalho 1: Encurtador de URLs Distribuído
 
-**Disciplina:** INE5418 – Computação Distribuída
-**Semestre:** 2026/1
+**Disciplina:** INE5418 – Computação Distribuída\
+**Semestre:** 2026/1\
 **Universidade:** Universidade Federal de Santa Catarina (UFSC)
 
 **Integrantes do grupo:**

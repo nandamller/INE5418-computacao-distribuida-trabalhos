@@ -33,7 +33,7 @@ def encurtar_url():
     
     # Gera um código curto único usando uuid(name=...) para que a mesma URL gere sempre o mesmo ID
     codigo = shortuuid.uuid(name=url_original)[:8]
-    
+
     # Armazena os dados no dicionário em memória
     url_storage[codigo] = {
         "url_original": url_original,
@@ -41,7 +41,6 @@ def encurtar_url():
     }
     
     print(f"[SERVIDOR] URL encurtada: {url_original} -> {codigo}")
-    
     return jsonify({
         "codigo": codigo,
         "url_curta": f"{BASE_HOST}{codigo}"
@@ -59,6 +58,7 @@ def resolver_url(codigo):
         # Incrementa o contador de acessos
         url_storage[codigo]["acessos"] += 1
 
+        print(f"[SERVIDOR] URL do código {codigo} foi removida!")
         return jsonify({
             "url_original": url_storage[codigo]["url_original"]
         }), 200
@@ -96,6 +96,7 @@ def listar_urls():
             "acessos": info["acessos"]
         })
     
+    print(f"[SERVIDOR] Listagem de URLs enviada!")
     return jsonify(lista), 200
 
 if __name__ == '__main__':
