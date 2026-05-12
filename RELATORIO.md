@@ -1,8 +1,7 @@
 # Relatório – Trabalho 1: Encurtador de URLs Distribuído
 
-**Disciplina:** INE5418 – Computação Distribuída\
+**Disciplina:** INE5418 – Computação Distribuída - UFSC\
 **Semestre:** 2026/1\
-**Universidade:** Universidade Federal de Santa Catarina (UFSC)
 
 **Integrantes do grupo:**
 - Fernanda Larissa Müller (21202109)
@@ -21,7 +20,7 @@ Encurtador de URLs distribuído com três componentes que se comunicam por proto
 
 - **Servidor REST** (Python/Flask): endpoints HTTP e armazenamento em dicionário em memória.
 - **Interceptador (proxy)** (Python): recebe TCP dos clientes, aplica Cache-Aside (LRU) e Fila de Prioridades, repassa por HTTP ao servidor. O servidor não sabe que o proxy existe.
-- **Bibliotecas cliente** em Python e em JavaScript/Node.js, mesma interface (`encurta`, `resolve`, `remove`) sobre o mesmo protocolo JSON/TCP — atende ao requisito de heterogeneidade.
+- **Bibliotecas cliente** em Python e em JavaScript/Node.js, mesma interface (`encurta`, `resolve`, `remove`) sobre o mesmo protocolo JSON/TCP.
 
 Tudo roda em containers Docker orquestrados por `docker-compose.yml`.
 
@@ -32,7 +31,7 @@ Tudo roda em containers Docker orquestrados por `docker-compose.yml`.
 ### 2.1 Linguagens
 
 - **Python 3.10** no servidor, no proxy e em uma das bibliotecas cliente. Familiaridade da equipe e disponibilidade direta de `socket`, `threading` e `queue` na stdlib.
-  - Servidor: Flask para os endpoints; `shortuuid` para gerar códigos.
+  - Servidor: Flask para os endpoints, por familiaridade da equipe; `shortuuid` para gerar códigos.
   - Proxy: `requests` para falar com o servidor; sockets e threading da stdlib.
 - **Node.js 20** na segunda biblioteca cliente, sem dependências externas (só o módulo nativo `net`).
 
@@ -54,7 +53,7 @@ JSON sobre TCP, uma requisição por conexão.
 {"erro": "..."}                               // falha
 ```
 
-O campo `"fonte": "cache"` é uma adição nossa para observar o cache em ação sem precisar inspecionar logs do proxy.
+O campo `"fonte": "cache"` é uma melhoria do projeto para observar o cache em ação sem precisar inspecionar logs do proxy.
 
 ### 2.3 Cache-Aside com política LRU (`proxy/cache_aside.py`)
 
@@ -64,7 +63,7 @@ Sobre **coerência**: o proxy só invalida o cache **depois** que o `DELETE` no 
 
 ### 2.4 Segundo padrão: Fila de Prioridades
 
-**Justificativa da escolha.** O proxy recebe três tipos de operação com sensibilidades diferentes a latência:
+**Justificativa da escolha.** Esse padrão faz sentido para uso no escopo desse projeto. O proxy recebe três tipos de operação com sensibilidades diferentes a latência:
 
 - `resolve` (GET) — operação mais frequente e a que o usuário final percebe diretamente.
 - `remove` (DELETE) — afeta coerência do cache; vale rodar antes dos `encurta`.
@@ -74,15 +73,13 @@ Sobre **coerência**: o proxy só invalida o cache **depois** que o `DELETE` no 
 
 Em uso normal a fila quase nunca acumula e o efeito é invisível. Para evidenciar o padrão durante a demo, criamos a variável de ambiente `DEMO_DELAY` no proxy, que insere um atraso artificial em cada requisição (default 0). Detalhes na seção 4.4.
 
-Avaliamos Circuit Breaker e Throttling como alternativas; ambos são padrões reativos (a falha do servidor ou abuso externo) e o problema mais natural deste sistema é dar resposta rápida a `resolve` mesmo sob contenção, que é o que a fila resolve.
-
 ### 2.5 Configuração via variáveis de ambiente
 
-Todos os parâmetros de runtime (portas, URL do servidor vista pelo proxy, capacidade do cache, `DEMO_DELAY`) são lidos de variáveis de ambiente declaradas no `docker-compose.yml`, com defaults sensatos no código. Alterar um parâmetro não exige rebuild de imagem — só reiniciar o serviço com a nova env.
+Todos os parâmetros de runtime (portas, URL do servidor vista pelo proxy, capacidade do cache, `DEMO_DELAY`) são lidos de variáveis de ambiente declaradas no `docker-compose.yml`, com defaults sensatos no código. Alterar um parâmetro não exige rebuild de imagem, apenas reiniciar o serviço com a nova env.
 
 ### 2.6 Identificação de códigos curtos
 
-`shortuuid.uuid(name=url)[:8]` — 8 caracteres derivados de hash da URL. A mesma URL gera sempre o mesmo código (idempotência), evitando duplicatas no `url_storage`. Trocamos da escolha inicial (UUID v4 aleatório, 36 chars) porque códigos longos poluíam logs e exemplos.
+`shortuuid.uuid(name=url)[:8]` são 8 caracteres derivados de hash da URL. A mesma URL gera sempre o mesmo código, evitando duplicatas no `url_storage`. Trocamos da escolha inicial (UUID v4 aleatório, 36 chars) porque códigos longos poluíam logs e exemplos.
 
 ---
 
@@ -134,7 +131,7 @@ print('2a:', c.resolve(cod))
 2a: {'url_original': 'https://example.com', 'fonte': 'cache'}
 ```
 
-A 2ª resolução vem com `"fonte": "cache"` e os logs do proxy mostram `[CACHE HIT]` sem novo `[CACHE MISS]` — não houve chamada HTTP ao servidor.
+A 2ª resolução vem com `"fonte": "cache"` e os logs do proxy mostram `[CACHE HIT]` sem novo `[CACHE MISS]` e não houve chamada HTTP ao servidor.
 
 ### 4.2 Invalidação no `remove` + eviction LRU (cliente Python completo)
 
@@ -152,10 +149,6 @@ O `__main__` do `clients/python/client.py` executa um ciclo completo: encurta + 
 [CACHE] Entrada 3424b0d8 invalidada com sucesso.
 [CACHE MISS] ... 3424b0d8 (cse após remove → 404 do servidor)
 ```
-
-Observação: o `inf.ufsc.br` foi expulso, e não o `ppgcc.ufsc.br` que entrou depois — porque o HIT no inf chamou `move_to_end`, e depois ele voltou a ser o mais antigo após 4 inserções. Confirma que o LRU age sobre a janela de **acessos** (gets + puts), não só de inserções.
-
-Junto com 4.1, esta seção cobre os 4 comportamentos do cache: miss, hit, eviction e invalidação.
 
 ### 4.3 Heterogeneidade — interoperação Python ↔ JavaScript
 
@@ -202,7 +195,7 @@ $ python3 demos/demo_prioridades.py
 
 Depois que a fila começou a acumular, o worker processou estritamente em ordem de prioridade. Em média, um `resolve` foi atendido **3× mais rápido** que um `encurta` apesar de terem chegado todos no mesmo intervalo de ~1ms.
 
-A única "fora de ordem" foi a `#06` (encurta processada primeiro): chegou quando a fila ainda estava vazia e o worker a pegou imediatamente. Como a implementação não é preemptiva (não interrompemos uma requisição em andamento para atender uma de prioridade maior), isso é esperado — em carga estacionária o efeito de prioridade domina.
+A única "fora de ordem" foi a `#06` (encurta processada primeiro): chegou quando a fila ainda estava vazia e o worker a pegou imediatamente. Como a implementação não é preemptiva (não interrompemos uma requisição em andamento para atender uma de prioridade maior), isso é esperado e em carga estacionária o efeito de prioridade domina.
 
 ### 4.5 Variar o tamanho do cache
 
@@ -220,10 +213,8 @@ Com capacidade 20, o cenário da seção 4.2 não dispararia eviction (só 6 ins
 
 ## 5. Conclusões e limitações
 
-### 5.1 Conclusões
-
 - **Cache-Aside reduz tráfego ao servidor de forma mensurável.** O contador `acessos` no servidor só incrementa em cache miss; as resoluções servidas pelo cache não chegam ao servidor.
 - **A invalidação no `remove` mantém coerência sem complicação** — uma única chamada `cache.invalidate(codigo)` depois do DELETE bem-sucedido.
 - **A fila de prioridades introduz equidade entre tipos de requisição com custo baixo.** No teste sob carga, `resolve` foi atendido em média 3× mais rápido que `encurta`.
 - **Heterogeneidade não é uma propriedade do servidor.** O protocolo JSON/TCP é simples o bastante para qualquer linguagem com socket nativo implementar uma biblioteca em ~30 linhas.
-- **O cache do proxy é único e compartilhado** entre todos os clientes, independente da linguagem — comprovado pelo teste em que uma entrada criada pelo cliente JS foi expulsa pelo LRU disparado por inserções do cliente Python.
+- **O cache do proxy é único e compartilhado** entre todos os clientes, independente da linguagem, comprovado pelo teste em que uma entrada criada pelo cliente JS foi expulsa pelo LRU disparado por inserções do cliente Python.
