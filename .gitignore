@@ -31,9 +31,6 @@ yarn-error.log*
 *.swo
 *~
 
-# --- Claude Code (configurações locais) ---
-.claude/
-
 # --- Logs / temporários ---
 *.log
 *.tmp

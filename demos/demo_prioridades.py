@@ -1,8 +1,8 @@
 """
 Demo da fila de prioridades do interceptador.
 
-Dispara várias requisições TCP em paralelo misturando 'encurta' (prio=2),
-'remove' (prio=1) e 'resolve' (prio=0). Imprime a ordem de envio e a ordem
+Dispara várias requisições TCP em paralelo misturando 'encurta' (prioridade=2),
+'remove' (prioridade=1) e 'resolve' (prioridade=0). Imprime a ordem de envio e a ordem
 de resposta para evidenciar que requisições de prioridade menor "furam fila".
 
 Para que a demonstração seja visível, o proxy precisa estar rodando com
@@ -37,7 +37,7 @@ def enviar(payload):
 
 
 def main():
-    # 1. Pré-encurta uma URL para ter um código válido para resolves.
+    # 1. Encurta uma URL para ter um código válido para resolves.
     print("Pré-encurta uma URL para resolves...")
     _, _, resp = enviar({"acao": "encurta", "url": "https://demo.priority"})
     codigo_valido = resp["codigo"]
@@ -50,7 +50,7 @@ def main():
         + [("resolve", {"acao": "resolve", "codigo": codigo_valido}) for _ in range(4)]
         + [("remove", {"acao": "remove", "codigo": str(uuid.uuid4())}) for _ in range(3)]
     )
-    # Embaralha a ordem de chegada para forçar o teste:
+    # Embaralha a ordem de chegada para forçar o teste
     import random
     random.seed(42)
     random.shuffle(cenario)
