@@ -1,9 +1,9 @@
 """
-Nó (processo) do consenso Raft + aplicação de leilão.
+Nó (processo) do consenso Raft + aplicação de votação do Oscar.
 
 Cada processo deste arquivo é um nó independente do cluster. Ele:
   1. Implementa o algoritmo de CONSENSO Raft (eleição de líder + replicação de log);
-  2. Aplica o log replicado na máquina de estado da aplicação (o leilão);
+  2. Aplica o log replicado na máquina de estado da aplicação (a votação);
   3. Atende clientes e os demais nós por sockets TCP.
 
 Resumo do Raft (building block):
@@ -27,7 +27,7 @@ import threading
 import time
 
 from transport import send_line, recv_line, rpc
-from auction import AuctionStateMachine
+from oscar import OscarStateMachine
 
 # Parâmetros de tempo (generosos, para que os logs da demo sejam legíveis).
 HEARTBEAT_INTERVAL = 0.5      # intervalo entre heartbeats do líder (s)
@@ -74,8 +74,8 @@ class RaftNode:
         self.last_heartbeat_sent = 0.0
         self.running = True
 
-        # Máquina de estado da aplicação (leilão).
-        self.app = AuctionStateMachine()
+        # Máquina de estado da aplicação (votação do Oscar).
+        self.app = OscarStateMachine()
 
         # Clientes bloqueiam até o comando ser commitado.
         # index do log -> {"event": Event, "result": dict}
@@ -125,7 +125,7 @@ class RaftNode:
                 resp = self._on_request_vote(msg)
             elif mtype == "append_entries":
                 resp = self._on_append_entries(msg)
-            elif mtype in ("bid", "start_auction", "close_auction", "status"):
+            elif mtype in ("vote", "open_category", "close_category", "status"):
                 resp = self._on_client(msg)
             else:
                 resp = {"ok": False, "error": f"tipo desconhecido: {mtype}"}
@@ -405,7 +405,7 @@ class RaftNode:
 
 def main():
     base = os.path.dirname(os.path.abspath(__file__))
-    ap = argparse.ArgumentParser(description="Nó Raft do leilão distribuído")
+    ap = argparse.ArgumentParser(description="Nó Raft da votação distribuída do Oscar")
     ap.add_argument("node_id", help="id do nó (deve existir no cluster.json)")
     ap.add_argument("--config", default=os.path.join(base, "cluster.json"))
     args = ap.parse_args()
