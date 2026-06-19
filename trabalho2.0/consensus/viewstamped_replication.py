@@ -7,15 +7,19 @@ import uvicorn
 import httpx
 
 from utils.Enum import Status
-from utils.args import PrepareArgs, PrepareOKArgs
+from utils.args import PrepareArgs, CommitArgs, RequestArgs
+from utils.args import PrepareOKArgs
 from utils.exceptions import InvalidStatusError, ViewMismatchError, LogInconsistencyError
 
 
 # --- Viewstamped Replication Node State ---
 class VRNode:
-    def __init__(self, replica_id: int, all_replicas: List[str]):
-        self.host = host
-        self.port = port
+    def __init__(self, current_address, replica_id: int, all_replicas: List[str]):
+
+        # TO FIX: em Process1 , replica_id é uma tupla (host, port). Aqui espera um INT
+        self.host = current_address[0]
+        self.port = current_address[1]
+
         self.replica_id = replica_id
         self.all_replicas = all_replicas  # List of URLs (e.g., ["http://127.0.0.1:8000", ...])
         self.N = len(all_replicas)
@@ -52,14 +56,14 @@ class VRNode:
         if not self.is_primary():
             # TODO: implementar um retorno adequado pro cliente informando o endereço do primário
             raise InvalidStatusError(current_status="BACKUP", expected_status="PRIMARY")
-        if self.status != NodeStatus.NORMAL:
+        if self.status != Status.NORMAL:
             raise InvalidStatusError(current_status=self.status.value)
 
         # Drop or handle duplicate requests from the same client
         client_id = args.client_id
         if client_id in self.client_table:
             if args.request_num <= self.client_table[client_id]["request_num"]:
-                print(f"[Node {self.replica_num}] Duplicate client request dropped.")
+                print(f"[Node {self.replica_id}] Duplicate client request dropped.")
                 return
 
         # Advance operation number and append to local log
@@ -79,7 +83,7 @@ class VRNode:
             "result": None
         }
 
-        print(f"[Primary Node {self.replica_num}] Processing op_num {self.op_num}: '{args.op}'")
+        print(f"[Primary Node {self.replica_id}] Processing op_num {self.op_num}: '{args.op}'")
         
         # Trigger communication: In your network loop, you would now send a 
         # PREPARE message containing `PrepareArgs` to all backups.
@@ -120,14 +124,18 @@ class VRNode:
             # Backups can safely execute up to the primary's last known committed transaction
             self.commit(args.commit_num)
 
-            print(f"[Backup Node {self.replica_num}] Prepared op_num {self.op_num}. Sending PREPARE_OK.")
+            print(f"[Backup Node {self.replica_id}] Prepared op_num {self.op_num}. Sending PREPARE_OK.")
             
             # Trigger communication: Network layer sends this back to the primary
-            return PrepareOkArgs(view=self.view_num, op_num=self.op_num, replica_num=self.replica_num)
+
+            # TO FIX: PrepareOkArgs não é função; é classe. Pode corrigir com:
+            prepare_ok = PrepareOkArgs(view=self.view_num, op_num=self.op_num, replica_id=self.replica_id)
+            return prepare_ok
+            #return PrepareOkArgs(view=self.view_num, op_num=self.op_num, replica_num=self.replica_num)
         else:
             raise LogInconsistencyError(expected_op=self.op_num + 1, received_op=args.op_num)
 
-    prepare_ok(self, args: PrepareOKArgs):
+    def prepare_ok(self, args: PrepareOKArgs):
         """Executed ONLY by the Primary. Tracks quorum for an operation."""
         if not self.is_primary():
             return
@@ -142,11 +150,11 @@ class VRNode:
             self.prepare_ok_counts[op_num] = set()
 
         # Add the replica that acknowledged the operation
-        self.prepare_ok_counts[op_num].add(args.replica_num)
+        self.prepare_ok_counts[op_num].add(args.replica_id)
 
         # Quorum Check: Including the primary itself, we need f agreements (so f backups)
         if len(self.prepare_ok_counts[op_num]) >= self.quorum_size:
-            print(f"[Primary Node {self.replica_num}] Quorum achieved for op_num {op_num}!")
+            print(f"[Primary Node {self.replica_id}] Quorum achieved for op_num {op_num}!")
             
             # Commit entries sequentially up to this one
             self.commit(op_num)
@@ -172,7 +180,7 @@ class VRNode:
                 "status": "COMMITTED",
                 "result": result
             }
-            print(f"[Node {self.replica_num}] Committed entry op_num {self.commit_num}.")
+            print(f"[Node {self.replica_id}] Committed entry op_num {self.commit_num}.")
 
     def reply(self, op_num: int):
         """Executed ONLY by the Primary. Sends response back to the client."""
@@ -183,24 +191,24 @@ class VRNode:
         client_info = self.client_table.get(entry["client_id"])
         
         if client_info and client_info["status"] == "COMMITTED":
-            print(f"[Primary Node {self.replica_num}] REPLYing to Client {entry['client_id']}: {client_info['result']}")
+            print(f"[Primary Node {self.replica_id}] REPLYing to Client {entry['client_id']}: {client_info['result']}")
             # TODO: Inside your actual network logic, you would transmit the result to the client here.
 
     def start_view_change(self):
         """Executed when a backup suspects the primary has crashed (Timeout)."""
-        self.status = NodeStatus.VIEW_CHANGE
+        self.status = Status.VIEW_CHANGE
         self.view_num += 1
-        print(f"[Node {self.replica_num}] Primary timed out! Starting View Change to View {self.view_num}...")
+        print(f"[Node {self.replica_id}] Primary timed out! Starting View Change to View {self.view_num}...")
         
         # Broadcast START_VIEW_CHANGE(v, replica_num) to all replicas
         # In actual network, broadcast: {"type": "START_VIEW_CHANGE", "view": self.view_num, "replica": self.replica_num}
-        return {"type": "START_VIEW_CHANGE", "view": self.view_num, "replica": self.replica_num}
+        return {"type": "START_VIEW_CHANGE", "view": self.view_num, "replica": self.replica_id}
 
     def do_view_change(self, incoming_view: int, sender_replica: int, sender_state: Dict):
         """Executed by the deterministic NEXT Primary once it receives enough START_VIEW_CHANGEs."""
         # Only the next primary acts as the coordinator for the view change aggregation
         next_primary_id = incoming_view % self.num_replicas
-        if self.replica_num != next_primary_id:
+        if self.replica_id != next_primary_id:
             return # I am not the designated coordinator for this view change
             
         if incoming_view not in self.view_change_votes:
@@ -214,18 +222,18 @@ class VRNode:
         
         # Wait for a quorum of f DO_VIEW_CHANGE payloads
         if len(self.view_change_votes[incoming_view]) >= self.f:
-            print(f"[Node {self.replica_num}] Received quorum of DO_VIEW_CHANGE. Taking over as Primary!")
+            print(f"[Node {self.replica_id}] Received quorum of DO_VIEW_CHANGE. Taking over as Primary!")
             self.view_num = incoming_view
             
             # Select the most up-to-date log payload from quorum
             self.new_state(self.view_change_votes[incoming_view])
             
-            self.status = NodeStatus.NORMAL
+            self.status = Status.NORMAL
             self.start_view()
 
     def start_view(self):
         """Executed by the NEW Primary to notify all backups to move to the new view."""
-        print(f"[New Primary Node {self.replica_num}] Broadcasting START_VIEW for view {self.view_num} to all backups.")
+        print(f"[New Primary Node {self.replica_id}] Broadcasting START_VIEW for view {self.view_num} to all backups.")
         # Broadcast START_VIEW message with the renewed log to all nodes.
 
     def get_state(self) -> Dict[str, Any]:
@@ -248,6 +256,6 @@ class VRNode:
         self.op_num = farthest_state["op_num"]
         self.commit_num = farthest_state["commit_num"]
         self.client_table = farthest_state["client_table"]
-        print(f"[Node {self.replica_num}] Local state updated/synchronized to op_num {self.op_num}.")
+        print(f"[Node {self.replica_id}] Local state updated/synchronized to op_num {self.op_num}.")
 
 

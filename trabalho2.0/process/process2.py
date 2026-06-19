@@ -2,13 +2,28 @@ import os
 
 import socket
 from Process import BaseProcess
+from consensus.viewstamped_replication import VRNode
 
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT","6062"))
 
+DEFAULT_TOPOLOGY = '[["127.0.0.1", 6061], ["127.0.0.1", 6062], ["127.0.0.1", 6063]]'
+CLUSTER_TOPOLOGY = os.getenv("CLUSTER_TOPOLOGY", DEFAULT_TOPOLOGY)
+
 
 class Process2(BaseProcess):
+
+    def __init__(self, host: str, port: int, topology: list):
+        BaseProcess.__init__(self, host=host, port=port)
+
+        # TO FIX: o que é esperado para valor int de "replica_id" - corrigir linha abaixo
+        replica_id = 0
+
+        VRNode.__init__(self, current_address=(host, port), replica_id=replica_id, all_replicas=topology)
+        
+        self.is_running = True
+
     def execute(self):
         print(f"[Process 2] Started. Listening on {self.host}:{self.port}...")
         
