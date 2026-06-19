@@ -11,6 +11,8 @@ class BaseProcess(ABC):
         """Abstract method that must contain the communication logic."""
         pass
 
+# TO DO: CRIAR APLICAÇÃO FLASK AQUI
+
     # def iniciar(self):
     #     """Inicia o processo utilizando o multiprocessing."""
     #     self._processo = multiprocessing.Process(target=self.executar)

@@ -1,0 +1,46 @@
+services:
+  process1:
+    build:
+      context: .
+      dockerfile: process/Dockerfile
+    container_name: process1
+    hostname: process1
+    command: python process/process1.py
+    environment:
+      - HOST=process1
+      - PORT=6061
+      - PROCESS_ID=1
+    networks:
+      - vr-network
+
+  process2:
+    build:
+      context: .
+      dockerfile: process/Dockerfile
+    container_name: process2
+    hostname: process2
+    command: python process/process2.py 
+    environment:
+      - HOST=process2
+      - PORT=6062
+      - PROCESS_ID=2
+    networks:
+      - vr-network
+
+  process3:
+    build:
+      context: .
+      dockerfile: process/Dockerfile
+    container_name: process3
+    hostname: process3
+    command: python process/process3.py 
+    environment:
+      - HOST=process3
+      - PORT=6063
+      - PROCESS_ID=3
+    networks:
+      - vr-network
+
+networks:
+  vr-network:
+    driver: bridge
