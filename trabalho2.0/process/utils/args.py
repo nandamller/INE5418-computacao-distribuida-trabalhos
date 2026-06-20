@@ -19,3 +19,8 @@ class PrepareOKArgs(BaseModel):
 class CommitArgs(BaseModel):
     view: int
     commit_num: int
+
+class RequestArgs(BaseModel):
+    op: str
+    client_id: int
+    request_num: int

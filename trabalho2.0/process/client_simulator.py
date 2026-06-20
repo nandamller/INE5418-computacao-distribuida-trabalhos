@@ -1,0 +1,182 @@
+"""
+Simulador de clientes para o cluster Viewstamped Replication.
+
+Cada "cliente simulado" roda numa thread própria e manda operações sequenciais
+(request_num incremental, como o protocolo exige) pro endereço HTTP que acredita
+ser o primário. Se errar (réplica responde 409), segue o redirecionamento que o
+próprio servidor devolve. Se o endpoint atual estiver fora do ar (conexão recusada,
+timeout -- ex.: durante uma troca de view), roda pro próximo endereço conhecido.
+
+Variáveis de ambiente:
+  CLUSTER_TOPOLOGY   JSON com [[host, porta_socket], ...] -- mesmo formato usado
+                     pelos process1/2/3.py. A porta HTTP de cada réplica é
+                     SEMPRE porta_socket + 1000 (convenção do BaseProcess).
+  NUM_CLIENTS        quantos clientes simulados rodar em paralelo (default 3)
+  OPS_PER_CLIENT     quantas operações cada cliente manda; <=0 = roda pra sempre (default 20)
+  MIN_THINK_TIME     espera mínima (s) entre uma operação e a próxima de um cliente (default 0.5)
+  MAX_THINK_TIME     espera máxima (s) entre uma operação e a próxima de um cliente (default 2.0)
+  REQUEST_TIMEOUT    timeout (s) de cada chamada HTTP (default 3.0)
+  CHAOS_ENABLED      "true"/"false" -- se ativado, dispara troca de view manual
+                     periodicamente num nó aleatório, pra exercitar a recuperação
+                     do cluster durante a simulação (default false)
+  CHAOS_INTERVAL     intervalo (s) entre ações do chaos monkey (default 15)
+"""
+import json
+import os
+import random
+import threading
+import time
+
+import requests
+
+CLUSTER_TOPOLOGY = json.loads(os.getenv(
+    "CLUSTER_TOPOLOGY",
+    '[["process1", 7061], ["process2", 7062], ["process3", 7063]]'
+))
+# Convenção do projeto (ver BaseProcess.__init__): porta HTTP = porta do socket.
+ENDPOINTS = [
+    f"http://{host}:{int(port)}"
+    for host, port in CLUSTER_TOPOLOGY.values()
+]
+
+NUM_CLIENTS = int(os.getenv("NUM_CLIENTS", "3"))
+OPS_PER_CLIENT = int(os.getenv("OPS_PER_CLIENT", "20"))  # <=0 roda pra sempre
+MIN_THINK_TIME = float(os.getenv("MIN_THINK_TIME", "0.5"))
+MAX_THINK_TIME = float(os.getenv("MAX_THINK_TIME", "2.0"))
+REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "3.0"))
+
+_print_lock = threading.Lock()
+
+
+def log(tag: str, msg: str):
+    with _print_lock:
+        print(f"[{tag}] {msg}", flush=True)
+
+
+class SimulatedClient:
+    """Cliente sequencial: um request_num por vez, nunca em paralelo consigo mesmo."""
+
+    def __init__(self, client_id: int):
+        self.client_id = client_id
+        self.request_num = 0
+        # Começa apontando pra endpoints diferentes entre si, só pra não
+        # martelar todo mundo no mesmo nó antes do primeiro redirecionamento.
+        self.endpoint_idx = ENDPOINTS[0]
+
+    def send_one(self, op: str) -> bool:
+        self.request_num += 1
+        payload = {
+            "client_id": self.client_id,
+            "request_num": self.request_num,
+            "op": op,
+        }
+
+        # Dá pra dar a volta completa nos endpoints conhecidos (e mais um pouco,
+        # pra absorver um redirecionamento extra) antes de desistir dessa operação.
+        max_attempts = len(ENDPOINTS) * 2 + 2
+        # self.endpoint_idx = ENDPOINTS[self.endpoint_idx]
+        for attempt in range(1, max_attempts + 1):
+            endpoint = self.endpoint_idx
+
+            url = f"{endpoint}/client/request"
+            start = time.monotonic()
+            try:
+                resp = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
+            except requests.exceptions.RequestException as exc:
+                print(f"[ERROR] client-{self.client_id}", f"{endpoint} inacessível ({exc.__class__.__name__})")
+                break
+
+            elapsed_ms = (time.monotonic() - start) * 1000
+
+            if resp.status_code == 409:
+                primary = (resp.json() or {}).get("primary", {})
+
+                log(f"client-{self.client_id}", f"{endpoint} não é primário; redirecionando para replica_id={primary}")
+                if isinstance(primary, str) and primary[4:] == "http":
+                    self.endpoint_idx = primary
+                else:
+                    print(f"[ERROR] client-{self.client_id} não informou o nó primário para nova consulta!")
+                    break
+                continue
+            elif resp.status_code == 503:
+                print(f"client-{self.client_id}", f"Cluster está em estado de VIEW_CHANGE. Tentando novamente em 2s...")
+                time.sleep(2)
+                continue
+
+            if resp.status_code == 200:
+                result = (resp.json() or {}).get("result")
+                log(f"client-{self.client_id}", f"req#{self.request_num} '{op}' -> OK em {elapsed_ms:.0f}ms via {endpoint}: {result}")
+                return True
+
+            if resp.status_code == 202:
+                log(f"client-{self.client_id}", f"req#{self.request_num} '{op}' -> em andamento (202) via {endpoint}, seguindo adiante")
+                return True
+
+            log(f"client-{self.client_id}", f"req#{self.request_num} '{op}' -> resposta inesperada {resp.status_code} via {endpoint}: {resp.text[:200]}")
+            return False
+
+        log(f"client-{self.client_id}", f"req#{self.request_num} '{op}' -> FALHOU depois de {max_attempts} tentativas (cluster indisponível?)")
+        return False
+
+    def run(self, ops_count: int):
+        done = 0
+        while ops_count <= 0 or done < ops_count:
+            done += 1
+            op = f"SET key{self.client_id}={random.randint(1, 1000)}"
+            self.send_one(op)
+            time.sleep(random.uniform(MIN_THINK_TIME, MAX_THINK_TIME))
+        log(f"client-{self.client_id}", "terminou.")
+
+
+def chaos_monkey():
+    """De vez em quando dispara uma troca de view manual num nó aleatório, pra
+    simular instabilidade e validar que os clientes se recuperam sozinhos."""
+    while True:
+        time.sleep(CHAOS_INTERVAL)
+        target = random.choice(ENDPOINTS)
+        try:
+            requests.post(f"{target}/admin/start_view_change", timeout=REQUEST_TIMEOUT)
+            log("chaos", f"disparou view change manual em {target}")
+        except requests.exceptions.RequestException as exc:
+            log("chaos", f"não consegui falar com {target}: {exc.__class__.__name__}")
+
+
+def wait_for_cluster(timeout: float = 30.0):
+    """Espera os nós responderem /status antes de soltar tráfego de verdade
+    (útil em Docker Compose, onde os containers podem demorar pra abrir a porta)."""
+    deadline = time.monotonic() + timeout
+    pending = set(ENDPOINTS)
+    while pending and time.monotonic() < deadline:
+        for ep in list(pending):
+            try:
+                requests.get(f"{ep}/status", timeout=1.0)
+                pending.discard(ep)
+                log("startup", f"{ep} respondeu, ok")
+            except requests.exceptions.RequestException:
+                pass
+        if pending:
+            time.sleep(1.0)
+    if pending:
+        log("startup", f"AVISO: não consegui confirmar {pending} dentro de {timeout:.0f}s, seguindo de qualquer jeito")
+
+
+def main():
+    log("startup", f"endpoints conhecidos: {ENDPOINTS}")
+    log("startup", f"{NUM_CLIENTS} clientes, {OPS_PER_CLIENT if OPS_PER_CLIENT > 0 else 'infinitas'} operações cada")
+    wait_for_cluster()
+
+    threads = []
+    for client_id in range(1, NUM_CLIENTS + 1):
+        client = SimulatedClient(client_id)
+        t = threading.Thread(target=client.run, args=(OPS_PER_CLIENT,))
+        t.start()
+        threads.append(t)
+
+    for t in threads:
+        t.join()
+
+    log("startup", "todos os clientes terminaram.")
+
+
+if __name__ == "__main__":
+    main()

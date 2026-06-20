@@ -7,9 +7,14 @@ services:
     hostname: process1
     command: python process/process1.py
     environment:
-      - HOST=process1
+      - HOST=0.0.0.0
       - PORT=6061
       - PROCESS_ID=1
+      - CLUSTER_TOPOLOGY={"6061":["process1", 7061],"6062":["process2", 7062],"6063":["process3", 7063]}
+      - PRIMARY_ID=6061
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "7061:7061"
     networks:
       - vr-network
 
@@ -19,11 +24,16 @@ services:
       dockerfile: process/Dockerfile
     container_name: process2
     hostname: process2
-    command: python process/process2.py 
+    command: python process/process2.py
     environment:
-      - HOST=process2
+      - HOST=0.0.0.0
       - PORT=6062
       - PROCESS_ID=2
+      - CLUSTER_TOPOLOGY={"6061":["process1", 7061],"6062":["process2", 7062],"6063":["process3", 7063]}
+      - PRIMARY_ID=6061
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "7062:7062"
     networks:
       - vr-network
 
@@ -33,13 +43,45 @@ services:
       dockerfile: process/Dockerfile
     container_name: process3
     hostname: process3
-    command: python process/process3.py 
+    command: python process/process3.py
     environment:
-      - HOST=process3
+      - HOST=0.0.0.0
       - PORT=6063
       - PROCESS_ID=3
+      - CLUSTER_TOPOLOGY={"6061":["process1", 7061],"6062":["process2", 7062],"6063":["process3", 7063]}
+      - PRIMARY_ID=6061
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "7063:7063"
     networks:
       - vr-network
+
+  # Roda só quando pedido explicitamente: `docker compose --profile simulation up`.
+  # Assim, um `docker compose up` normal sobe só o cluster, sem tráfego sintético.
+  client-simulator:
+    build:
+      context: .
+      dockerfile: process/Dockerfile
+    container_name: client-simulator
+    command: python process/client_simulator.py
+    environment:
+      - CLUSTER_TOPOLOGY={"6061":["process1", 7061],"6062":["process2", 7062],"6063":["process3", 7063]}
+      - NUM_CLIENTS=3
+      - OPS_PER_CLIENT=20
+      - MIN_THINK_TIME=0.5
+      - MAX_THINK_TIME=2.0
+      - REQUEST_TIMEOUT=3.0
+      - CHAOS_ENABLED=true
+      - CHAOS_INTERVAL=15
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - process1
+      - process2
+      - process3
+    networks:
+      - vr-network
+    profiles:
+      - simulation
 
 networks:
   vr-network:
