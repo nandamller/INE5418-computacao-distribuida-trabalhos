@@ -235,12 +235,12 @@ def check(condition: bool, msg: str):
 # ---------------------------------------------------------------------------
 
 def main():
-    print("\n╔══════════════════════════════════════════════════════════╗")
-    print("║   Teste de eleição de líder — Viewstamped Replication   ║")
-    print("╚══════════════════════════════════════════════════════════╝\n")
+
+    print("##  Teste de eleição de líder — Viewstamped Replication   ##\n")
+
 
     # ── 1. Cluster up ──────────────────────────────────────────────────────
-    print("── Fase 1: aguardando cluster ─────────────────────────────")
+    print(" Fase 1: aguardando cluster ")
     ok = wait_for_cluster(STARTUP_TIMEOUT)
     check(ok, "Todos os 3 nós responderam /status")
     if not ok:
@@ -259,7 +259,7 @@ def main():
                 f"replica_id={initial_primary_id}  view_num={initial_view}")
 
     # ── 2. Aquecimento ─────────────────────────────────────────────────────
-    print("\n── Fase 2: aquecimento (operações normais) ─────────────────")
+    print("\n Fase 2: aquecimento (operações normais) ")
 
     # Dois clientes, ambos apontando para o primário conhecido
     alice = Client(client_id=1, start_endpoint=initial_primary_ep)
@@ -278,7 +278,7 @@ def main():
     # ── 3. Falha simulada: freeze via HTTP ─────────────────────────────────
     frozen_key = initial_primary_key
     frozen_ep  = initial_primary_ep
-    print(f"\n── Fase 3: travando '{frozen_ep}' via POST /admin/freeze ────")
+    print(f"\n Fase 3: travando '{frozen_ep}' via POST /admin/freeze ")
     log("chaos", f"Enviando freeze de {FREEZE_SECONDS}s para {frozen_ep}...")
     try:
         fr = requests.post(f"{frozen_ep}/admin/freeze",
@@ -292,7 +292,7 @@ def main():
     freeze_time = time.time()
 
     # ── 4. Operações durante a falha ───────────────────────────────────────
-    print("\n── Fase 4: operações enquanto o líder está travado ─────────")
+    print("\n Fase 4: operações enquanto o líder está travado ")
     log("info", "Clientes continuam enviando; espera-se 409/timeout até a eleição")
 
     # Alice e Bob tentam em background enquanto monitoramos a eleição
@@ -312,7 +312,7 @@ def main():
     t_bob.start()
 
     # ── 5. Aguarda eleição ──────────────────────────────────────────────────
-    print("\n── Fase 5: aguardando eleição do novo primário ──────────────")
+    print("\n Fase 5: aguardando eleição do novo primário ")
     new_key, new_ep, new_view = wait_for_new_primary(
         exclude_key=frozen_key,
         old_view=initial_view,
@@ -342,7 +342,7 @@ def main():
     log("info", f"Operações durante falha: {successful_during}/{len(results_during_failure)} bem-sucedidas")
 
     # ── 6. Operações pós-eleição ────────────────────────────────────────────
-    print("\n── Fase 6: operações pós-eleição (cluster saudável?) ───────")
+    print("\n Fase 6: operações pós-eleição (cluster saudável?) ")
     alice.endpoint = new_ep
     bob.endpoint   = new_ep
 
@@ -357,14 +357,14 @@ def main():
               f"Bob pós-eleição op {i} aceita")
 
     # ── 7. Aguarda o freeze expirar e o nó reintegrar ──────────────────────
-    print(f"\n── Fase 7: aguardando freeze expirar e '{frozen_ep}' reintegrar ──")
+    print(f"\n Fase 7: aguardando freeze expirar e '{frozen_ep}' reintegrar ")
     remaining = FREEZE_SECONDS - (time.time() - freeze_time)
     if remaining > 0:
         log("info", f"Freeze ainda ativo por ~{remaining:.0f}s, aguardando...")
         time.sleep(remaining + 1)
 
     rejoin_time = time.time()
-    print(f"\n── Fase 8: verificando sincronização de '{frozen_ep}' ───────────")
+    print(f"\n Fase 8: verificando sincronização de '{frozen_ep}' ")
     rejoined_info = None
     deadline = time.monotonic() + REJOIN_TIMEOUT
     while time.monotonic() < deadline:
@@ -388,7 +388,7 @@ def main():
         log("info", f"Estado do nó reintegrado em {elapsed_rejoin:.1f}s: {rejoined_info}")
 
     # ── 9. Operação final com todos os nós ─────────────────────────────────
-    print("\n── Fase 9: operação final com cluster completo ─────────────")
+    print("\n Fase 9: operação final com cluster completo ")
     carol = Client(client_id=3, start_endpoint=new_ep)
     r = carol.send("SET carol=final_check", label="final")
     check(r is not None and r["status_code"] in (200, 202),

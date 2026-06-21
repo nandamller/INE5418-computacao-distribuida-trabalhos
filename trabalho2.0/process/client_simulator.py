@@ -128,6 +128,7 @@ class SimulatedClient:
         log(f"client-{self.client_id}", "terminou.")
 
 
+# TODO: ESSA FUNÇÃO NAO É CHAMADA
 def chaos_monkey():
     """De vez em quando dispara uma troca de view manual num nó aleatório, pra
     simular instabilidade e validar que os clientes se recuperam sozinhos."""
