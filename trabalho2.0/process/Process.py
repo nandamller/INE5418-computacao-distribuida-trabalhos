@@ -65,9 +65,9 @@ class BaseProcess(ABC):
         pass
 
 
-    # ---------------------------------------------------------------------
+   
     # HTTP (Flask) - o passageiro (cliente externo) fala com o terminal por aqui
-    # ---------------------------------------------------------------------
+   
 
     def _register_common_routes(self):
         @self.app.route('/status', methods=['GET'])
@@ -210,9 +210,9 @@ class BaseProcess(ABC):
             # Fora do lock: é I/O de rede para os backups.
             self.broadcast_to_backups("COMMIT", commit_args)
 
-    # ---------------------------------------------------------------------
+   
     # Socket cru - réplicas conversam entre si por aqui (PREPARE, COMMIT, etc.)
-    # ---------------------------------------------------------------------
+   
 
     def execute(self):
         """Loop do socket de replicação: aceita conexões continuamente, uma thread por conexão."""

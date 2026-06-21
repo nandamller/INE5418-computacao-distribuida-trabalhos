@@ -53,9 +53,7 @@ import threading
 
 import requests
 
-# ---------------------------------------------------------------------------
 # Configuração
-# ---------------------------------------------------------------------------
 
 CLUSTER_TOPOLOGY: dict = json.loads(os.getenv(
     "CLUSTER_TOPOLOGY",
@@ -82,9 +80,8 @@ def log(tag: str, msg: str):
         print(f"  {ts} [{tag}] {msg}", flush=True)
 
 
-# ---------------------------------------------------------------------------
 # Infra HTTP
-# ---------------------------------------------------------------------------
+
 
 def http_get(endpoint: str, path: str) -> dict | None:
     try:
@@ -96,9 +93,9 @@ def http_get(endpoint: str, path: str) -> dict | None:
 
 
 
-# ---------------------------------------------------------------------------
+
 # Passageiro sequencial (estilo client_simulator.py)
-# ---------------------------------------------------------------------------
+
 
 class Client:
     """
@@ -174,9 +171,9 @@ class Client:
         return None
 
 
-# ---------------------------------------------------------------------------
+
 # Helpers de cluster
-# ---------------------------------------------------------------------------
+
 
 def wait_for_cluster(timeout: float) -> bool:
     deadline = time.monotonic() + timeout
@@ -219,9 +216,9 @@ def wait_for_new_primary(exclude_key: str, old_view: int, timeout: float):
     return None, None, None
 
 
-# ---------------------------------------------------------------------------
+
 # Asserções
-# ---------------------------------------------------------------------------
+
 
 _failures = 0
 
@@ -234,16 +231,15 @@ def check(condition: bool, msg: str):
         _failures += 1
 
 
-# ---------------------------------------------------------------------------
+
 # Teste principal
-# ---------------------------------------------------------------------------
 
 def main():
 
     print("##  Reserva de assentos — eleição de líder (Viewstamped Replication)   ##\n")
 
 
-    # ── 1. Cluster up ──────────────────────────────────────────────────────
+    #  1. Cluster up 
     print(" Fase 1: aguardando cluster ")
     ok = wait_for_cluster(STARTUP_TIMEOUT)
     check(ok, "Todos os 3 nós responderam /status")
@@ -262,7 +258,7 @@ def main():
     log("info", f"Primário inicial: endpoint={initial_primary_ep}  "
                 f"replica_id={initial_primary_id}  view_num={initial_view}")
 
-    # ── 2. Aquecimento ─────────────────────────────────────────────────────
+    #  2. Aquecimento 
     print("\n Fase 2: aquecimento (operações normais) ")
 
     # Dois passageiros, ambos apontando para o primário conhecido
@@ -279,7 +275,7 @@ def main():
         check(r is not None and r["status_code"] in (200, 202),
               f"Bob reserva {i} aceita pelo cluster")
 
-    # ── 3. Falha simulada: freeze via HTTP ─────────────────────────────────
+    #  3. Falha simulada: freeze via HTTP 
     frozen_key = initial_primary_key
     frozen_ep  = initial_primary_ep
     print(f"\n Fase 3: travando '{frozen_ep}' via POST /admin/freeze ")
@@ -295,7 +291,7 @@ def main():
     check(ok, f"POST /admin/freeze aceito por {frozen_ep}")
     freeze_time = time.time()
 
-    # ── 4. Operações durante a falha ───────────────────────────────────────
+    #  4. Operações durante a falha 
     print("\n Fase 4: operações enquanto o líder está travado ")
     log("info", "Passageiros continuam reservando; espera-se 409/timeout até a eleição")
 
@@ -315,7 +311,7 @@ def main():
     t_alice.start()
     t_bob.start()
 
-    # ── 5. Aguarda eleição ──────────────────────────────────────────────────
+    #  5. Aguarda eleição 
     print("\n Fase 5: aguardando eleição do novo primário ")
     new_key, new_ep, new_view = wait_for_new_primary(
         exclude_key=frozen_key,
@@ -345,7 +341,7 @@ def main():
     )
     log("info", f"Operações durante falha: {successful_during}/{len(results_during_failure)} bem-sucedidas")
 
-    # ── 6. Operações pós-eleição ────────────────────────────────────────────
+    #  6. Operações pós-eleição 
     print("\n Fase 6: operações pós-eleição (cluster saudável?) ")
     alice.endpoint = new_ep
     bob.endpoint   = new_ep
@@ -360,7 +356,7 @@ def main():
         check(r is not None and r["status_code"] in (200, 202),
               f"Bob pós-eleição reserva {i} aceita")
 
-    # ── 7. Aguarda o freeze expirar e o nó reintegrar ──────────────────────
+    #  7. Aguarda o freeze expirar e o nó reintegrar 
     print(f"\n Fase 7: aguardando freeze expirar e '{frozen_ep}' reintegrar ")
     remaining = FREEZE_SECONDS - (time.time() - freeze_time)
     if remaining > 0:
@@ -397,14 +393,14 @@ def main():
         log("info", f"Estado do nó reintegrado em {elapsed_rejoin:.1f}s: "
                     f"status={rejoined_info} info={replica_info}")
 
-    # ── 9. Operação final com todos os nós ─────────────────────────────────
+    #  9. Operação final com todos os nós 
     print("\n Fase 9: operação final com cluster completo ")
     carol = Client(client_id=3, start_endpoint=new_ep)
     r = carol.send("RESERVE 30F passenger=carol", label="final")
     check(r is not None and r["status_code"] in (200, 202),
           "Operação final aceita pelo cluster completo")
 
-    # ── Resumo ─────────────────────────────────────────────────────────────
+    #  Resumo 
     print("\n╔══════════════════════════════════════════════════════════╗")
     if _failures == 0:
         print("║  ✅  Todos os checks passaram!                          ║")

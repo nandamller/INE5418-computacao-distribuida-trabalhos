@@ -6,19 +6,17 @@ reservar assentos ao mesmo tempo, e o sistema precisa garantir que **dois passag
 nunca fiquem com o mesmo assento**, mesmo havendo concorrência, atraso de rede e falha
 de um terminal.
 
-O *building block* central é o **Consenso / Replicação**, implementado pelo algoritmo
+O *building block* central é o **Consenso**, implementado pelo algoritmo
 **Viewstamped Replication (VR)** (eleição de líder + replicação de log). Toda a
 comunicação entre processos usa **Berkeley Sockets (TCP)**.
 
 > INE 5418 — Computação Distribuída — 2026/1
 
-## Integrantes
+## Integrantes Grupo 9
 
-> ⚠️ Preencher com os nomes do grupo (exigido pelo enunciado).
->
-> - Nome 1
-> - Nome 2
-> - Nome 3
+> - Fernanda Larissa Müller
+> - Julia Fischer Gazolla
+> - Lucas Tomio Schwchow
 
 ---
 

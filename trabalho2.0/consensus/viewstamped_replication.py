@@ -27,13 +27,13 @@ class VRNode:
         self.port = current_address[1]
 
         self.replica_id = replica_id
-        self.all_replicas = all_replicas  # List of [host, port] pairs, na MESMA ORDEM em todos os nós
+        self.all_replicas = all_replicas  # Lista de [host, port], na MESMA ORDEM em todos os nós
                                            # (o índice de cada par é o replica_id daquele nó - ver Process.py)
         self.N = len(all_replicas)
         self.f = (self.N - 1) // 2
         self.quorum_size = self.f + 1
 
-        # VR State variables
+        # variáveis VR State
         self.op_num = 0
         self.commit_num = 0
         self.view_num = 0
@@ -42,19 +42,19 @@ class VRNode:
         self.primary_id = primary_id
         self.status: Status = Status.NORMAL
 
-        self.op_log: List[Dict[str, Any]] = [] # The replicated log: list of {"op": str, "view": int, "client_id": int, "request_num": int}
-        self.client_table: Dict[int, Dict[str, Any]] = {} # Tracks client_id -> {"request_num": int, "result": Any, "status": str}
+        self.op_log: List[Dict[str, Any]] = [] # The replicated log: lista de {"op": str, "view": int, "client_id": int, "request_num": int}
+        self.client_table: Dict[int, Dict[str, Any]] = {} # Rastreia client_id -> {"request_num": int, "result": Any, "status": str}
 
-        self.prepare_ok_counts: Dict[int, set] = {} # op_num -> set of replica_ids that sent PREPARE_OK (inclui o próprio primário)
-        self.start_view_change_votes: Dict[int, set] = {} # view_num -> set of replica_ids vistos enviando START_VIEW_CHANGE
-        self.view_change_votes: Dict[int, List[Dict]] = {} # view_num -> list of received DO_VIEW_CHANGE messages (inclui o do próprio nó)
+        self.prepare_ok_counts: Dict[int, set] = {} # op_num -> conjunto de replica_ids que enviaram PREPARE_OK (inclui o próprio primário)
+        self.start_view_change_votes: Dict[int, set] = {} # view_num -> conjunto de replica_ids vistos enviando START_VIEW_CHANGE
+        self.view_change_votes: Dict[int, List[Dict]] = {} # view_num -> lista de DO_VIEW_CHANGE de mensagens recebidas (inclui o do próprio nó)
 
     @property
     def is_primary(self) -> bool:
         return self.replica_id == self.primary_id
 
     def received_request(self, args: RequestArgs):
-        """Executed ONLY by the Primary. Receives client request and starts replication."""
+        """Executado APENAS pelo Primary. Recebe pedidos de cliente e incia a replicação."""
         if not self.is_primary:
             print(f"[Node {self.replica_id}] Operation rejected: node status is BACKUP. Expected PRIMARY.")
             return {
@@ -87,7 +87,7 @@ class VRNode:
                 print(f"[Node {self.replica_id}] Duplicate request still in flight, dropped.")
                 return None
 
-        # Advance operation number and append to local log
+        # Número da operação avançada e anexado ao registro local
         self.op_num += 1
         log_entry = {
             "op": args.op,
@@ -97,7 +97,7 @@ class VRNode:
         }
         self.op_log.append(log_entry)
         
-        # Update client table status
+        # Atualiza status na tabela de cliente
         self.client_table[client_id] = {
             "request_num": args.request_num,
             "status": "PREPARING",
@@ -110,8 +110,6 @@ class VRNode:
 
         print(f"[Primary Node {self.replica_id}] Processing op_num {self.op_num}: '{args.op}'")
         
-        # Trigger communication: In your network loop, you would now send a 
-        # PREPARE message containing `PrepareArgs` to all backups.
         prepare_msg = PrepareArgs(
             view=self.view_num,
             op_num=self.op_num,
@@ -123,7 +121,7 @@ class VRNode:
         return prepare_msg
 
     def prepare(self, args: PrepareArgs):
-        """Executed by Backups. Processes a replication command from the primary."""
+        """Exceutado pelos Backups. Processa um comando de replicação do servidor primary."""
         if self.status != Status.NORMAL:
             raise InvalidStatusError(current_status=self.status.value)
         if args.view != self.view_num:
@@ -145,19 +143,19 @@ class VRNode:
                 "request_num": args.request_num
             })
 
-            # Update client table
+            # Atualiza tabela cliente
             self.client_table[args.client_id] = {
                 "request_num": args.request_num,
                 "status": "PREPARING",
                 "result": None
             }
 
-            # Backups can safely execute up to the primary's last known committed transaction
+            # Os backups podem executar com segurança até a última transação confirmada conhecida do servidor primário.
             self.commit(args.commit_num)
 
             print(f"[Backup Node {self.replica_id}] Prepared op_num {self.op_num}. Sending PREPARE_OK.")
             
-            # Trigger communication: Network layer sends this back to the primary
+            # Acionar a comunicação: a camada de rede envia isso de volta para o primário.
             prepare_ok = PrepareOKArgs(view=self.view_num, op_num=self.op_num, replica_id=self.replica_id)
             return prepare_ok
         else:
@@ -166,20 +164,20 @@ class VRNode:
             raise LogInconsistencyError(expected_op=self.op_num + 1, received_op=args.op_num)
 
     def prepare_ok(self, args: PrepareOKArgs):
-        """Executed ONLY by the Primary. Tracks quorum for an operation."""
+        """Executado APENAS pelo Primary. Monitora o quórum para uma operação."""
         if not self.is_primary:
             return
         if args.view != self.view_num:
-            return # Ignore stale view responses
+            return # Ignorar respostas de visualização antigas
         
         op_num = args.op_num
         if op_num <= self.commit_num:
-            return # Already committed
+            return # Já commitado
 
         if op_num not in self.prepare_ok_counts:
             self.prepare_ok_counts[op_num] = {self.replica_id}
 
-        # Add the replica that acknowledged the operation
+        # Adicione a réplica que confirmou a operação.
         self.prepare_ok_counts[op_num].add(args.replica_id)
 
         # Quorum Check: o set já inclui o próprio primário, então quorum_size (f+1) aqui
@@ -187,15 +185,15 @@ class VRNode:
         if len(self.prepare_ok_counts[op_num]) >= self.quorum_size:
             print(f"[Primary Node {self.replica_id}] Quorum achieved for op_num {op_num}!")
             
-            # Commit entries sequentially up to this one
+            # Confirme as entradas sequencialmente até esta.
             self.commit(op_num)
             
-            # Primary executes the state machine and replies to client
+            # O processo primário executa a máquina de estados e responde ao cliente.
             return self.reply(op_num)
 
     def commit(self, primary_commit_num: int):
-        """Advances the local commit pointer and applies logs to the state machine."""
-        # Ensure we commit sequentially and never beyond our current op_num
+        """Avança o ponteiro de commit local e aplica os logs à máquina de estados."""
+
         target_commit = min(primary_commit_num, self.op_num)
         
         while self.commit_num < target_commit:
@@ -207,7 +205,7 @@ class VRNode:
             # todas as réplicas percorrem o log na mesma ordem, o resultado é o mesmo.
             result = f"Reserva confirmada: {entry['op']}"
             
-            # Finalize client table status
+            # Finaliza client table status
             self.client_table[entry["client_id"]] = {
                 "request_num": entry["request_num"],
                 "status": "COMMITTED",
@@ -229,7 +227,7 @@ class VRNode:
         self.commit(args.commit_num)
 
     def reply(self, op_num: int):
-        """Executed ONLY by the Primary. Sends response back to the client."""
+        """Executado APENAS pelo primary. Envia a resposta de volta para o cliente."""
         if not self.is_primary:
             return
 
@@ -241,9 +239,7 @@ class VRNode:
             # Devolve o resultado para quem chamou (camada de rede) transmitir ao cliente.
             return client_info["result"]
 
-    # ------------------------------------------------------------------
     # Timeout / Heartbeat do primário
-    # ------------------------------------------------------------------
 
     # Intervalo (segundos) sem receber PREPARE ou COMMIT do primário antes
     # de um backup suspeitar que ele caiu e iniciar uma troca de view.
@@ -324,7 +320,7 @@ class VRNode:
 
     def receive_start_view_change(self, view_num: int, sender_replica: int, old_primary: int) -> Dict[str, Dict]:
         """
-        Executed by ANY replica upon receiving a START_VIEW_CHANGE from a peer.
+        Executado por QUALQUER réplica ao receber um comando START_VIEW_CHANGE de um par.
 
         Se esta réplica ainda não tinha aderido a essa view (ou estava numa view
         mais antiga), ela TAMBÉM entra em VIEW_CHANGE e propaga seu próprio
@@ -383,7 +379,7 @@ class VRNode:
 
     def do_view_change(self, incoming_view: int, sender_replica: int, sender_state: Dict, target_primary):
         """
-        Executed by the deterministic NEXT Primary once it receives enough DO_VIEW_CHANGEs.
+        Executado pelo NEXT Primary determinístico assim que receber DO_VIEW_CHANGES suficientes.
         Chamar apenas para mensagens vindas de OUTRAS réplicas: o estado deste próprio nó
         é incluído automaticamente na primeira chamada para essa view.
         """
@@ -403,7 +399,7 @@ class VRNode:
                 {"sender": self.replica_id, "state": self.get_state()}
             ]
 
-        # Store state payload sent by changing nodes (idempotente: réplica que reenviar
+        # Armazenar a carga útil do estado enviada pelos nós que estão sendo alterados (idempotente: réplica que reenviar
         # DO_VIEW_CHANGE pra essa view não duplica entrada)
         if not any(v["sender"] == sender_replica for v in self.view_change_votes[incoming_view]):
             self.view_change_votes[incoming_view].append({
@@ -411,7 +407,7 @@ class VRNode:
                 "state": sender_state
             })
         
-        # Wait for a quorum of f+1 DO_VIEW_CHANGE payloads (incluindo o próprio)
+        # Aguarde um quórum de f+1 payloads DO_VIEW_CHANGE (incluindo o próprio)
         if len(self.view_change_votes[incoming_view]) >= self.quorum_size:
             print(f"[Node {self.replica_id}] Received quorum of DO_VIEW_CHANGE. Taking over as Primary!")
             self.view_num = incoming_view
@@ -475,7 +471,7 @@ class VRNode:
 
     def new_state(self, quorum_states: List[Dict]):
         """
-        Executed by the new primary to consolidate logs based on the highest op_num received.
+        Executado pelo novo servidor primário para consolidar os logs com base no op_num mais alto recebido.
         Empates em op_num são resolvidos pelo maior commit_num: o conteúdo do log é o
         mesmo entre candidatos com op_num igual (um log replicado é sempre um prefixo
         consistente), mas o commit_num é só contabilidade local de cada réplica -- vale
@@ -488,7 +484,7 @@ class VRNode:
         )
         farthest_state = highest_op_entry["state"]
         
-        # Overwrite internal log with the safest log path discovered
+        # Sobrescrever o log interno com o caminho de log mais seguro encontrado
         self.op_log = farthest_state["op_log"]
         self.op_num = farthest_state["op_num"]
         self.commit_num = farthest_state["commit_num"]
