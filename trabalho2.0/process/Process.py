@@ -367,7 +367,10 @@ class BaseProcess(ABC):
                 if target_id == self.replica_id:
                     threading.Thread(target=self.dispatch_message, args=("DO_VIEW_CHANGE", dvc_payload), daemon=True).start()
                 else:
-                    target_host = self.all_replicas[target_id][0]
+                    # target_id vem de new_primary() como int, mas all_replicas é
+                    # carregado do JSON com chaves string ("6062"). Indexar com str
+                    # evita o KeyError que impedia o DO_VIEW_CHANGE de ser encaminhado.
+                    target_host = self.all_replicas[str(target_id)][0]
                     target_port = int(target_id)   # porta do socket, não a HTTP
                     threading.Thread(
                         target=self.send_to_replica,

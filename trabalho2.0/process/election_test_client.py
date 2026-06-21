@@ -365,10 +365,13 @@ def main():
 
     rejoin_time = time.time()
     print(f"\n Fase 8: verificando sincronização de '{frozen_ep}' ")
+    # /status expõe is_primary (e view_num); /replica/info expõe primary_id.
+    # Antes este bloco lia is_primary de /replica/info, que NÃO retorna esse campo,
+    # então o .get(..., True) sempre caía no default e reprovava o check do backup.
     rejoined_info = None
     deadline = time.monotonic() + REJOIN_TIMEOUT
     while time.monotonic() < deadline:
-        info = http_get(frozen_ep, "/replica/info")
+        info = http_get(frozen_ep, "/status")
         if info and info.get("view_num", 0) >= new_view:
             rejoined_info = info
             break
@@ -383,9 +386,12 @@ def main():
               f"(atual: {rejoined_info['view_num']})")
         check(not rejoined_info.get("is_primary", True),
               f"Nó travado voltou como BACKUP (não tentou retomar liderança)")
-        check(rejoined_info.get("primary_id") != initial_primary_id,
-              f"Nó travado reconhece o novo primário ({rejoined_info.get('primary_id')})")
-        log("info", f"Estado do nó reintegrado em {elapsed_rejoin:.1f}s: {rejoined_info}")
+        # primary_id só está disponível em /replica/info
+        replica_info = http_get(frozen_ep, "/replica/info") or {}
+        check(replica_info.get("primary_id") != initial_primary_id,
+              f"Nó travado reconhece o novo primário ({replica_info.get('primary_id')})")
+        log("info", f"Estado do nó reintegrado em {elapsed_rejoin:.1f}s: "
+                    f"status={rejoined_info} info={replica_info}")
 
     # ── 9. Operação final com todos os nós ─────────────────────────────────
     print("\n Fase 9: operação final com cluster completo ")
