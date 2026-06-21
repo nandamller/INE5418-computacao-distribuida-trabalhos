@@ -8,7 +8,7 @@ HOST = os.getenv("HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", "6061"))
 PRIMARY_ID = int(os.getenv("PRIMARY_ID", "6061"))
 
-DEFAULT_TOPOLOGY = '{"6061":["process1",7061],"6062":["process2",7062],"6063":["process3",7063]'
+DEFAULT_TOPOLOGY = '{"6061":["process1",7061],"6062":["process2",7062],"6063":["process3",7063]}'
 CLUSTER_TOPOLOGY = os.getenv("CLUSTER_TOPOLOGY", DEFAULT_TOPOLOGY)
 
 

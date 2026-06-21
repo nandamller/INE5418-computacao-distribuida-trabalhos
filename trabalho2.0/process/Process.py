@@ -7,8 +7,9 @@ from abc import ABC
 from flask import Flask, jsonify, request
 from pydantic import BaseModel
 
-from process.utils.args import RequestArgs, PrepareArgs, PrepareOKArgs, CommitArgs
-from process.utils.exceptions import InvalidStatusError
+from consensus.utils.args import RequestArgs, PrepareArgs, PrepareOKArgs, CommitArgs
+from consensus.utils.Enum import Status
+from consensus.utils.exceptions import LogInconsistencyError
 
 
 class NetworkMessage(BaseModel):
@@ -164,8 +165,12 @@ class BaseProcess(ABC):
         # use_reloader=False: obrigatório, o reloader não funciona fora da thread principal real.
         self.app.run(host=self.host, port=self.flask_port, threaded=True, use_reloader=False)
 
+    # Intervalo (s) do heartbeat do primário. Bem abaixo do PRIMARY_TIMEOUT (5s)
+    # dos backups, pra eles não suspeitarem de um primário saudável em ociosidade.
+    HEARTBEAT_INTERVAL = 2.0
+
     def start(self):
-        """Inicia o socket de replicação, e o Flask na thread principal."""
+        """Inicia o socket de replicação, o heartbeat, e o Flask na thread principal."""
         self.is_running = True
 
         socket_thread = threading.Thread(
@@ -175,10 +180,33 @@ class BaseProcess(ABC):
         )
         socket_thread.start()
 
+        threading.Thread(
+            target=self._heartbeat_loop,
+            name=f"{self.__class__.__name__}-heartbeat",
+            daemon=True,
+        ).start()
+
         try:
             self._run_flask()
         finally:
             self.is_running = False
+
+    def _heartbeat_loop(self):
+        """
+        Só o primário envia. Reenvia COMMIT(view, commit_num) periodicamente pros
+        backups para: (1) avançar o commit_num deles mesmo sem operação nova (a
+        última escrita não fica eternamente "preparando" nos backups); e (2) servir
+        de sinal de vida, evitando que suspeitem de um primário saudável e disparem
+        uma troca de view desnecessária durante períodos ociosos.
+        """
+        while self.is_running:
+            time.sleep(self.HEARTBEAT_INTERVAL)
+            with self.lock:
+                if not getattr(self, "is_primary", False) or self.status != Status.NORMAL:
+                    continue
+                commit_args = CommitArgs(view=self.view_num, commit_num=self.commit_num)
+            # Fora do lock: é I/O de rede para os backups.
+            self.broadcast_to_backups("COMMIT", commit_args)
 
     # ---------------------------------------------------------------------
     # Socket cru - réplicas conversam entre si por aqui (PREPARE, COMMIT, etc.)
@@ -237,7 +265,7 @@ class BaseProcess(ABC):
             return
 
         print(f"[{self.__class__.__name__}] Received {msg_type} from sender_port={data.get('sender_port')}")
-        reply_type, reply_payload = self.dispatch_message(msg_type, payload)
+        reply_type, reply_payload = self.dispatch_message(msg_type, payload, data.get("sender_port"))
         if reply_type is not None:
             try:
                 connection.sendall(self._serialize(reply_type, reply_payload))
@@ -281,6 +309,37 @@ class BaseProcess(ABC):
             print(f"[{self.__class__.__name__}] Falha ao falar com {host}:{port}: {exc}")
             return None
 
+    def _do_state_transfer(self, sender_port):
+        """
+        Busca o estado completo de `sender_port` (via STATE_REQUEST) e o aplica
+        localmente. Chamado quando este nó percebe que ficou atrás (recebeu PREPARE
+        ou COMMIT de uma view mais nova, ou um PREPARE com buraco no log).
+
+        Roda FORA do lock (faz I/O de rede); o apply re-adquire o lock.
+        """
+        if sender_port is None:
+            return
+        try:
+            host = self.all_replicas[str(sender_port)][0]
+        except (KeyError, AttributeError):
+            print(f"[{self.__class__.__name__}] State transfer: remetente {sender_port} desconhecido na topologia.")
+            return
+
+        result = self.send_to_replica(host, int(sender_port), "STATE_REQUEST", {})
+        if result is None:
+            print(f"[{self.__class__.__name__}] State transfer: sem resposta de {sender_port}.")
+            return
+        resp_type, state = result
+        if resp_type != "STATE_RESPONSE":
+            print(f"[{self.__class__.__name__}] State transfer: resposta inesperada {resp_type} de {sender_port}.")
+            return
+
+        with self.lock:
+            self.apply_state_transfer(state)
+        # Acabou de sincronizar com o primário: reinicia o cronômetro de suspeita.
+        if hasattr(self, "_reset_primary_timeout"):
+            self._reset_primary_timeout()
+
     def broadcast_to_backups(self, msg_type: str, payload, timeout: float = 2.0):
         """Envia para todas as réplicas do topology, exceto a própria. Retorna só as respostas que chegaram."""
         responses = []
@@ -290,27 +349,31 @@ class BaseProcess(ABC):
 
             replica_host = self.all_replicas[replica][0]
             replica_port = int(replica)
-            if isinstance(payload, dict) and payload["type"] == "START_VIEW_CHANGE" and payload["primary"] == replica_port:
-                print("KKKKKKKKK")
-                print(payload["primary"])
-                continue # não manda para quem era líder (está parado)
+            if isinstance(payload, dict) and payload.get("type") == "START_VIEW_CHANGE" and payload.get("primary") == replica_port:
+                # não reenvia START_VIEW_CHANGE para quem era o primário (provavelmente caído)
+                continue
 
             result = self.send_to_replica(replica_host, replica_port, msg_type, payload, timeout=timeout)
             if result is not None:
                 responses.append(result)
         return responses
 
-    def dispatch_message(self, msg_type: str, payload: dict):
+    def dispatch_message(self, msg_type: str, payload: dict, sender_port=None):
         """
         Roteia uma mensagem recebida pro método correspondente do VRNode (disponível em
         self porque as subclasses herdam de BaseProcess + VRNode ao mesmo tempo).
         Retorna (msg_type_da_resposta, payload_da_resposta), ou (None, None) se não
         há nada a responder na mesma conexão.
+
+        `sender_port` é a porta de socket de quem enviou a mensagem (vinda do envelope
+        NetworkMessage). É usada para saber de quem pedir um state transfer quando este
+        nó percebe que ficou atrás (view mais nova ou buraco no log).
         """
         try:
-            dvc_payload = None       # DO_VIEW_CHANGE a enviar para o novo primário
-            sv_payload = None        # START_VIEW a broadcastar (este nó virou o novo primário)
-            svc_rebroadcast = None   # START_VIEW_CHANGE a (re)propagar (este nó aderiu a uma view nova)
+            dvc_payload = None        # DO_VIEW_CHANGE a enviar para o novo primário
+            sv_payload = None         # START_VIEW a broadcastar (este nó virou o novo primário)
+            svc_rebroadcast = None    # START_VIEW_CHANGE a (re)propagar (este nó aderiu a uma view nova)
+            state_transfer_from = None  # porta de quem pedir state transfer (este nó está atrás)
 
             with self.lock:
                 if msg_type == "REQUEST":
@@ -324,8 +387,24 @@ class BaseProcess(ABC):
                 elif msg_type == "PREPARE":
                     if hasattr(self, "_reset_primary_timeout"):
                         self._reset_primary_timeout()
-                    result = self.prepare(PrepareArgs(**payload))
-                    return "PREPARE_OK", self._to_dict(result)
+                    incoming_view = payload.get("view", self.view_num)
+                    if incoming_view > self.view_num:
+                        # Estou atrás: sincroniza com o primário que enviou o PREPARE.
+                        print(f"[{self.__class__.__name__}] PREPARE de view {incoming_view} > {self.view_num}; "
+                              f"solicitando state transfer a {sender_port}.")
+                        state_transfer_from = sender_port
+                    elif incoming_view < self.view_num:
+                        # PREPARE de um primário obsoleto: ignora, não regride a view.
+                        return "ERROR", {"error": "stale view"}
+                    else:
+                        try:
+                            result = self.prepare(PrepareArgs(**payload))
+                            return "PREPARE_OK", self._to_dict(result)
+                        except LogInconsistencyError as exc:
+                            # Mesma view, mas há um buraco no log -> também precisa de state transfer.
+                            print(f"[{self.__class__.__name__}] Buraco no log ({exc}); "
+                                  f"solicitando state transfer a {sender_port}.")
+                            state_transfer_from = sender_port
 
                 elif msg_type == "PREPARE_OK":
                     self.prepare_ok(PrepareOKArgs(**payload))
@@ -334,8 +413,22 @@ class BaseProcess(ABC):
                 elif msg_type == "COMMIT":
                     if hasattr(self, "_reset_primary_timeout"):
                         self._reset_primary_timeout()
-                    self.receive_commit(CommitArgs(**payload))
-                    return "ACK", {}
+                    incoming_view = payload.get("view", self.view_num)
+                    if incoming_view > self.view_num:
+                        # Heartbeat de uma view mais nova: este nó ficou pra trás
+                        # (ex.: primário voltou de uma falha). Sincroniza via state transfer.
+                        print(f"[{self.__class__.__name__}] COMMIT de view {incoming_view} > {self.view_num}; "
+                              f"solicitando state transfer a {sender_port}.")
+                        state_transfer_from = sender_port
+                    else:
+                        self.receive_commit(CommitArgs(**payload))  # ignora internamente se view antiga
+                        return "ACK", {}
+
+                elif msg_type == "STATE_REQUEST":
+                    # Um peer atrasado pediu nosso estado completo para se sincronizar.
+                    snapshot = self.get_state()
+                    snapshot["primary_id"] = self.primary_id
+                    return "STATE_RESPONSE", snapshot
 
                 elif msg_type == "START_VIEW_CHANGE":
                     actions = self.receive_start_view_change(payload["view"], payload["replica"], payload["primary"])
@@ -357,6 +450,10 @@ class BaseProcess(ABC):
             # As ramificações abaixo ficam FORA do lock de propósito: elas fazem
             # I/O de rede com outras réplicas, e não queremos travar este nó enquanto
             # isso acontece.
+            if state_transfer_from is not None:
+                self._do_state_transfer(state_transfer_from)
+                return "ACK", {}
+
             if svc_rebroadcast is not None:
                 threading.Thread(
                     target=self.broadcast_to_backups, args=("START_VIEW_CHANGE", svc_rebroadcast), daemon=True

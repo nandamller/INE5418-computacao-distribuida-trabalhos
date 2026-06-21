@@ -9,11 +9,11 @@ PORT = int(os.getenv("PORT", "6062"))
 PRIMARY_ID = int(os.getenv("PRIMARY_ID", "6061"))
 
 
-DEFAULT_TOPOLOGY = '{"6061":["process1",7061],"6062":["process2",7062],"6063":["process3",7063]'
+DEFAULT_TOPOLOGY = '{"6061":["process1",7061],"6062":["process2",7062],"6063":["process3",7063]}'
 CLUSTER_TOPOLOGY = os.getenv("CLUSTER_TOPOLOGY", DEFAULT_TOPOLOGY)
 
 
-class Process3(BaseProcess, VRNode):
+class Process2(BaseProcess, VRNode):
     """Réplica VR. Ver Process1 para a explicação da herança múltipla."""
 
     def __init__(self, host: str, port: int, topology: list, primary_id: int):
@@ -25,5 +25,5 @@ class Process3(BaseProcess, VRNode):
 
 if __name__ == '__main__':
     topology = json.loads(CLUSTER_TOPOLOGY)
-    p3 = Process3(host=HOST, port=PORT, topology=topology, primary_id=PRIMARY_ID)
-    p3.start()
+    p2 = Process2(host=HOST, port=PORT, topology=topology, primary_id=PRIMARY_ID)
+    p2.start()

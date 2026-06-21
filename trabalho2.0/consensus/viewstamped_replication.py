@@ -433,6 +433,23 @@ class VRNode:
         self.commit(commit_num)
         print(f"[Node {self.replica_id}] Adotou a nova view {self.view_num}; primário agora é {self.primary_id}.")
 
+    def apply_state_transfer(self, state: Dict[str, Any]):
+        """
+        Adota integralmente o estado recebido de um peer mais atualizado. Usado no
+        recovery: quando este nó percebe que ficou pra trás (view antiga ou buraco
+        no log), ele pede o estado ao primário e o sobrescreve aqui, voltando para
+        NORMAL já sincronizado e reconhecendo o primário atual.
+        """
+        self.view_num = state["view_num"]
+        self.op_log = state["op_log"]
+        self.op_num = state["op_num"]
+        self.commit_num = state["commit_num"]
+        self.client_table = state.get("client_table", self.client_table)
+        self.primary_id = int(state["primary_id"])
+        self.status = Status.NORMAL
+        print(f"[Node {self.replica_id}] State transfer aplicado: view={self.view_num}, "
+              f"op_num={self.op_num}, commit_num={self.commit_num}, primário={self.primary_id}.")
+
     def get_state(self) -> Dict[str, Any]:
         """Packaging internal states to send during view changes or recoveries."""
         return {

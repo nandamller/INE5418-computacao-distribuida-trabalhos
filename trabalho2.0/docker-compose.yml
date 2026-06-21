@@ -69,8 +69,6 @@ services:
       - MIN_THINK_TIME=0.5
       - MAX_THINK_TIME=2.0
       - REQUEST_TIMEOUT=3.0
-      - CHAOS_ENABLED=true
-      - CHAOS_INTERVAL=15
       - PYTHONUNBUFFERED=1
     depends_on:
       - process1

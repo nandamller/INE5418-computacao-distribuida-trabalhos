@@ -16,10 +16,6 @@ Variáveis de ambiente:
   MIN_THINK_TIME     espera mínima (s) entre uma operação e a próxima de um cliente (default 0.5)
   MAX_THINK_TIME     espera máxima (s) entre uma operação e a próxima de um cliente (default 2.0)
   REQUEST_TIMEOUT    timeout (s) de cada chamada HTTP (default 3.0)
-  CHAOS_ENABLED      "true"/"false" -- se ativado, dispara troca de view manual
-                     periodicamente num nó aleatório, pra exercitar a recuperação
-                     do cluster durante a simulação (default false)
-  CHAOS_INTERVAL     intervalo (s) entre ações do chaos monkey (default 15)
 """
 import json
 import os
@@ -126,20 +122,6 @@ class SimulatedClient:
             self.send_one(op)
             time.sleep(random.uniform(MIN_THINK_TIME, MAX_THINK_TIME))
         log(f"client-{self.client_id}", "terminou.")
-
-
-# TODO: ESSA FUNÇÃO NAO É CHAMADA
-def chaos_monkey():
-    """De vez em quando dispara uma troca de view manual num nó aleatório, pra
-    simular instabilidade e validar que os clientes se recuperam sozinhos."""
-    while True:
-        time.sleep(CHAOS_INTERVAL)
-        target = random.choice(ENDPOINTS)
-        try:
-            requests.post(f"{target}/admin/start_view_change", timeout=REQUEST_TIMEOUT)
-            log("chaos", f"disparou view change manual em {target}")
-        except requests.exceptions.RequestException as exc:
-            log("chaos", f"não consegui falar com {target}: {exc.__class__.__name__}")
 
 
 def wait_for_cluster(timeout: float = 30.0):
