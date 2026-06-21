@@ -1,3 +1,5 @@
+import time
+
 from typing import List, Dict, Any
 
 from consensus.utils.Enum import Status
@@ -44,11 +46,10 @@ class VRNode:
         """Executed ONLY by the Primary. Receives client request and starts replication."""
         if not self.is_primary:
             print(f"[Node {self.replica_id}] Operation rejected: node status is BACKUP. Expected PRIMARY.")
-
             return {
                 "status": 409,
                 "message": "Please redirect your requests to the primary node.",
-                "primary_address": f"http://{self.all_replicas[self.primary_id][0]}:{self.all_replicas[self.primary_id][1]}"
+                "primary_address": f"http://{self.all_replicas[str(self.primary_id)][0]}:{self.all_replicas[str(self.primary_id)][1]}"
             }
         if self.status != Status.NORMAL:
             print(f"Operation rejected: node status is {self.status}. Expected NORMAL.")
@@ -227,9 +228,71 @@ class VRNode:
             # Devolve o resultado para quem chamou (camada de rede) transmitir ao cliente.
             return client_info["result"]
 
+    # ------------------------------------------------------------------
+    # Timeout / Heartbeat do primário
+    # ------------------------------------------------------------------
+
+    # Intervalo (segundos) sem receber PREPARE ou COMMIT do primário antes
+    # de um backup suspeitar que ele caiu e iniciar uma troca de view.
+    PRIMARY_TIMEOUT = 5.0
+
+    def _reset_primary_timeout(self):
+        """
+        Chamado pelo BaseProcess sempre que uma mensagem do primário chega
+        (PREPARE, COMMIT, START_VIEW, ...).  Reinicia o cronômetro de
+        suspeita de falha.
+        """
+        self._last_primary_contact = time.time()
+
+    def _start_timeout_watcher(self):
+        """
+        Lança (uma única vez) a thread que fica vigiando o timeout do primário.
+        Deve ser chamado pelo __init__ de cada réplica logo após VRNode.__init__.
+        """
+        import threading as _threading
+        self._last_primary_contact = time.time()
+        t = _threading.Thread(target=self._timeout_loop, daemon=True,
+                              name=f"VR-timeout-{self.replica_id}")
+        t.start()
+
+    def _timeout_loop(self):
+        """
+        Thread de background: acorda a cada segundo e, se o intervalo sem
+        contato com o primário ultrapassar PRIMARY_TIMEOUT e este nó NÃO for
+        o primário, dispara start_view_change() e propaga o voto.
+        """
+        import threading as _threading
+        import time as _time
+
+        while True:
+            _time.sleep(1.0)
+            if self.is_primary:
+                # Primário não precisa monitorar a si mesmo.
+                self._last_primary_contact = _time.time()
+                continue
+            if self.status == Status.VIEW_CHANGE:
+                # Já estamos em troca de view; não dispara de novo.
+                self._last_primary_contact = _time.time()
+                continue
+
+            elapsed = _time.time() - self._last_primary_contact
+            if elapsed >= self.PRIMARY_TIMEOUT:
+                print(f"[Node {self.replica_id}] Timeout do primário detectado "
+                      f"({elapsed:.1f}s sem contato). Iniciando view change...")
+                payload = self.start_view_change()
+                if payload is not None:
+                    # Propaga START_VIEW_CHANGE para os pares -- usa broadcast
+                    _threading.Thread(
+                        target=self.broadcast_to_backups,
+                        args=("START_VIEW_CHANGE", payload),
+                        daemon=True,
+                    ).start()
+                # Reseta para não ficar disparando a cada segundo enquanto o
+                # cluster ainda está convergindo.
+                self._last_primary_contact = _time.time()
+
     def start_view_change(self):
         """Executed when a backup suspects the primary has crashed (Timeout)."""
-        # TODO: fazer a lógica de timeout para os processos realmente chamarem view_change
         self.status = Status.VIEW_CHANGE
         self.view_num += 1
         # Já conta o próprio voto: esta réplica está, a partir de agora, em VIEW_CHANGE para essa view.
@@ -237,9 +300,16 @@ class VRNode:
         print(f"[Node {self.replica_id}] Primary timed out! Starting View Change to View {self.view_num}...")
         
         # Broadcast START_VIEW_CHANGE(v, replica_id) to all replicas
-        return {"type": "START_VIEW_CHANGE", "view": self.view_num, "replica": self.replica_id}
+        return {"type": "START_VIEW_CHANGE", "view": self.view_num, "replica": self.replica_id, "primary": self.primary_id}
 
-    def receive_start_view_change(self, view_num: int, sender_replica: int) -> Dict[str, Dict]:
+    def new_primary(self, old_primary: str):
+        for replica in sorted(self.all_replicas.keys()):
+            if replica == old_primary:
+                continue
+            print(f"Novo primário escolhido {replica}")
+            return int(replica)
+
+    def receive_start_view_change(self, view_num: int, sender_replica: int, old_primary: int) -> Dict[str, Dict]:
         """
         Executed by ANY replica upon receiving a START_VIEW_CHANGE from a peer.
 
@@ -273,7 +343,7 @@ class VRNode:
             self.view_num = view_num
             self.status = Status.VIEW_CHANGE
             print(f"[Node {self.replica_id}] Recebeu START_VIEW_CHANGE de {sender_replica}; também entrando em VIEW_CHANGE para view {view_num}.")
-            actions["start_view_change"] = {"type": "START_VIEW_CHANGE", "view": view_num, "replica": self.replica_id}
+            actions["start_view_change"] = {"type": "START_VIEW_CHANGE", "view": view_num, "replica": self.replica_id, "primary": self.primary_id}
         # Se view_num == self.view_num e já estamos em VIEW_CHANGE pra ela, só
         # contamos o voto abaixo -- já mandamos nosso próprio START_VIEW_CHANGE
         # antes, não precisa rebroadcastar de novo.
@@ -285,7 +355,8 @@ class VRNode:
         already_sent = self.start_view_change_votes.setdefault(("dvc_sent", view_num), set())
         if len(votes) >= self.quorum_size and self.replica_id not in already_sent:
             already_sent.add(self.replica_id)  # nunca manda DO_VIEW_CHANGE duas vezes pra mesma view
-            next_primary_id = view_num % self.N
+            
+            next_primary_id = self.new_primary(str(old_primary))
             print(f"[Node {self.replica_id}] Quorum de START_VIEW_CHANGE para view {view_num}. Enviando DO_VIEW_CHANGE para o novo primário ({next_primary_id}).")
             actions["do_view_change"] = {
                 "type": "DO_VIEW_CHANGE",
@@ -297,7 +368,7 @@ class VRNode:
 
         return actions
 
-    def do_view_change(self, incoming_view: int, sender_replica: int, sender_state: Dict):
+    def do_view_change(self, incoming_view: int, sender_replica: int, sender_state: Dict, target_primary):
         """
         Executed by the deterministic NEXT Primary once it receives enough DO_VIEW_CHANGEs.
         Chamar apenas para mensagens vindas de OUTRAS réplicas: o estado deste próprio nó
@@ -308,10 +379,9 @@ class VRNode:
         if self.status == Status.NORMAL and self.view_num >= incoming_view:
             return None
 
-        # Only the next primary acts as the coordinator for the view change aggregation
-        next_primary_id = incoming_view % self.N
-        if self.replica_id != next_primary_id:
-            return None # I am not the designated coordinator for this view change
+        # target_primary vem do payload, calculado por new_primary() em receive_start_view_change
+        if self.replica_id != int(target_primary):
+            return None  # I am not the designated coordinator for this view change
 
         if incoming_view not in self.view_change_votes:
             # Inclui o próprio estado do candidato a primário na disputa: ele também
@@ -332,7 +402,7 @@ class VRNode:
         if len(self.view_change_votes[incoming_view]) >= self.quorum_size:
             print(f"[Node {self.replica_id}] Received quorum of DO_VIEW_CHANGE. Taking over as Primary!")
             self.view_num = incoming_view
-            self.primary_id = self.replica_id
+            self.primary_id = self.replica_id  # int, correto
 
             # Select the most up-to-date log payload from quorum
             self.new_state(self.view_change_votes[incoming_view])
@@ -344,19 +414,19 @@ class VRNode:
     def start_view(self):
         """Executed by the NEW Primary to notify all backups to move to the new view."""
         print(f"[New Primary Node {self.replica_id}] Broadcasting START_VIEW for view {self.view_num} to all backups.")
-        # Payload que a camada de rede deve transmitir a todos os backups.
         return {
             "type": "START_VIEW",
             "view": self.view_num,
+            "primary_id": self.primary_id,
             "op_log": self.op_log,
             "op_num": self.op_num,
             "commit_num": self.commit_num,
         }
 
-    def receive_start_view(self, view_num: int, op_log: List[Dict], op_num: int, commit_num: int):
+    def receive_start_view(self, view_num: int, op_log: List[Dict], op_num: int, commit_num: int, primary_id: int):
         """Executed by Backups upon receiving START_VIEW from the new primary."""
         self.view_num = view_num
-        self.primary_id = view_num % self.N
+        self.primary_id = int(primary_id)
         self.op_log = op_log
         self.op_num = op_num
         self.status = Status.NORMAL

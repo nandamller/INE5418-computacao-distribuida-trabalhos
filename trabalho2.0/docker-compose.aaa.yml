@@ -10,7 +10,7 @@ services:
       - HOST=0.0.0.0
       - PORT=6061
       - PROCESS_ID=1
-      - CLUSTER_TOPOLOGY={"6061":["process1",7061],"6062":["process2",7062],"6063":["process3",7063]}
+      - CLUSTER_TOPOLOGY={"6061":["process1", 7061],"6062":["process2", 7062],"6063":["process3", 7063]}
       - PRIMARY_ID=6061
       - PYTHONUNBUFFERED=1
     ports:
@@ -29,7 +29,7 @@ services:
       - HOST=0.0.0.0
       - PORT=6062
       - PROCESS_ID=2
-      - CLUSTER_TOPOLOGY={"6061":["process1",7061],"6062":["process2",7062],"6063":["process3",7063]}
+      - CLUSTER_TOPOLOGY={"6061":["process1", 7061],"6062":["process2", 7062],"6063":["process3", 7063]}
       - PRIMARY_ID=6061
       - PYTHONUNBUFFERED=1
     ports:
@@ -48,7 +48,7 @@ services:
       - HOST=0.0.0.0
       - PORT=6063
       - PROCESS_ID=3
-      - CLUSTER_TOPOLOGY={"6061":["process1",7061],"6062":["process2",7062],"6063":["process3",7063]}
+      - CLUSTER_TOPOLOGY={"6061":["process1", 7061],"6062":["process2", 7062],"6063":["process3", 7063]}
       - PRIMARY_ID=6061
       - PYTHONUNBUFFERED=1
     ports:
@@ -56,6 +56,8 @@ services:
     networks:
       - vr-network
 
+  # Roda só quando pedido explicitamente: `docker compose --profile simulation up`.
+  # Assim, um `docker compose up` normal sobe só o cluster, sem tráfego sintético.
   client-simulator:
     build:
       context: .
@@ -63,7 +65,7 @@ services:
     container_name: client-simulator
     command: python process/client_simulator.py
     environment:
-      - CLUSTER_TOPOLOGY={"6061":["process1",7061],"6062":["process2",7062],"6063":["process3",7063]}
+      - CLUSTER_TOPOLOGY={"6061":["process1", 7061],"6062":["process2", 7062],"6063":["process3", 7063]}
       - NUM_CLIENTS=3
       - OPS_PER_CLIENT=20
       - MIN_THINK_TIME=0.5
@@ -80,24 +82,6 @@ services:
       - vr-network
     profiles:
       - simulation
-
-  election-test:
-    build:
-      context: .
-      dockerfile: process/Dockerfile
-    container_name: election-test
-    command: python process/election_test_client.py
-    environment:
-      - CLUSTER_TOPOLOGY={"6061":["process1",7061],"6062":["process2",7062],"6063":["process3",7063]}
-      - PYTHONUNBUFFERED=1
-    depends_on:
-      - process1
-      - process2
-      - process3
-    networks:
-      - vr-network
-    profiles:
-      - election-test
 
 networks:
   vr-network:

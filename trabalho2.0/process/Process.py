@@ -51,6 +51,7 @@ class BaseProcess(ABC):
 
         self.is_running = False
         self.lock = threading.Lock()  # protege o estado do VRNode entre as threads
+        self.false_fault = False
 
         self.app = Flask(self.__class__.__name__)
         self._register_common_routes()
@@ -135,13 +136,36 @@ class BaseProcess(ABC):
                 return jsonify({"result": client_info["result"]}), 200
             return jsonify({"status": "preparing", "op_num": prepare_msg.op_num}), 202
 
+        @self.app.route('/admin/freeze', methods=['POST'])
+        def admin_freeze():
+            """
+            Trava o nó por `seconds` segundos segurando o self.lock.
+            Isso bloqueia dispatch_message inteiro (PREPARE, COMMIT, etc.),
+            simulando um processo pendurado sem matar o container.
+
+            Body JSON: {"seconds": <float>}   (default: 10)
+            """
+            data = request.get_json(force=True) or {}
+            seconds = float(data.get("seconds", 10))
+
+            def _hold_lock():
+                print(f"[{self.__class__.__name__}] FREEZE: travando por {seconds}s...", flush=True)
+                self.false_fault = True
+                with self.lock:
+                    time.sleep(seconds)
+                self.false_fault = False
+                print(f"[{self.__class__.__name__}] FREEZE: liberado.", flush=True)
+
+            threading.Thread(target=_hold_lock, daemon=True).start()
+            return jsonify({"status": "freezing", "seconds": seconds}), 200
+
     def _run_flask(self):
         # threaded=True: o Flask atende várias requisições HTTP concorrentes.
         # use_reloader=False: obrigatório, o reloader não funciona fora da thread principal real.
         self.app.run(host=self.host, port=self.flask_port, threaded=True, use_reloader=False)
 
     def start(self):
-        """Inicia o socket de replicação, o heartbeat (se ligado) numa thread em background, e o Flask na thread principal."""
+        """Inicia o socket de replicação, e o Flask na thread principal."""
         self.is_running = True
 
         socket_thread = threading.Thread(
@@ -208,6 +232,10 @@ class BaseProcess(ABC):
             print(f"[{self.__class__.__name__}] Mensagem inválida descartada: {exc}")
             return
 
+        if self.false_fault:
+            print("Pausa FAKE no processo! Vamos pular a requisição!")
+            return
+
         print(f"[{self.__class__.__name__}] Received {msg_type} from sender_port={data.get('sender_port')}")
         reply_type, reply_payload = self.dispatch_message(msg_type, payload)
         if reply_type is not None:
@@ -236,22 +264,22 @@ class BaseProcess(ABC):
 
     def send_to_replica(self, host: str, port: int, msg_type: str, payload, timeout: float = 2.0):
         """Abre uma conexão nova, envia uma mensagem e espera por exatamente uma resposta. None em falha/timeout."""
-        # try:
-        with socket.create_connection((host, port), timeout=timeout) as s:
-            s.sendall(self._serialize(msg_type, payload))
-            s.settimeout(timeout)
-            buffer = b""
-            while b"\n" not in buffer:
-                chunk = s.recv(4096)
-                if not chunk:
-                    return None
-                buffer += chunk
-            line, _, _ = buffer.partition(b"\n")
-            data = json.loads(line.decode("utf-8"))
-            return data.get("msg_type"), data.get("payload", {})
-        # except (ConnectionRefusedError, socket.timeout, OSError, json.JSONDecodeError) as exc:
-        #     print(f"[{self.__class__.__name__}] Falha ao falar com {host}:{port}: {exc}")
-        #     return None
+        try:
+            with socket.create_connection((host, port), timeout=timeout) as s:
+                s.sendall(self._serialize(msg_type, payload))
+                s.settimeout(timeout)
+                buffer = b""
+                while b"\n" not in buffer:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        return None
+                    buffer += chunk
+                line, _, _ = buffer.partition(b"\n")
+                data = json.loads(line.decode("utf-8"))
+                return data.get("msg_type"), data.get("payload", {})
+        except (ConnectionRefusedError, socket.timeout, OSError, json.JSONDecodeError) as exc:
+            print(f"[{self.__class__.__name__}] Falha ao falar com {host}:{port}: {exc}")
+            return None
 
     def broadcast_to_backups(self, msg_type: str, payload, timeout: float = 2.0):
         """Envia para todas as réplicas do topology, exceto a própria. Retorna só as respostas que chegaram."""
@@ -262,6 +290,11 @@ class BaseProcess(ABC):
 
             replica_host = self.all_replicas[replica][0]
             replica_port = int(replica)
+            if isinstance(payload, dict) and payload["type"] == "START_VIEW_CHANGE" and payload["primary"] == replica_port:
+                print("KKKKKKKKK")
+                print(payload["primary"])
+                continue # não manda para quem era líder (está parado)
+
             result = self.send_to_replica(replica_host, replica_port, msg_type, payload, timeout=timeout)
             if result is not None:
                 responses.append(result)
@@ -289,6 +322,8 @@ class BaseProcess(ABC):
                     return "PREPARE", self._to_dict(result)
 
                 elif msg_type == "PREPARE":
+                    if hasattr(self, "_reset_primary_timeout"):
+                        self._reset_primary_timeout()
                     result = self.prepare(PrepareArgs(**payload))
                     return "PREPARE_OK", self._to_dict(result)
 
@@ -297,19 +332,23 @@ class BaseProcess(ABC):
                     return "ACK", {}
 
                 elif msg_type == "COMMIT":
+                    if hasattr(self, "_reset_primary_timeout"):
+                        self._reset_primary_timeout()
                     self.receive_commit(CommitArgs(**payload))
                     return "ACK", {}
 
                 elif msg_type == "START_VIEW_CHANGE":
-                    actions = self.receive_start_view_change(payload["view"], payload["replica"])
+                    actions = self.receive_start_view_change(payload["view"], payload["replica"], payload["primary"])
                     svc_rebroadcast = actions.get("start_view_change")
                     dvc_payload = actions.get("do_view_change")
 
                 elif msg_type == "DO_VIEW_CHANGE":
-                    sv_payload = self.do_view_change(payload["view"], payload["sender"], payload["state"])
+                    sv_payload = self.do_view_change(payload["view"], payload["sender"], payload["state"], payload["target_primary"])
 
                 elif msg_type == "START_VIEW":
-                    self.receive_start_view(payload["view"], payload["op_log"], payload["op_num"], payload["commit_num"])
+                    if hasattr(self, "_reset_primary_timeout"):
+                        self._reset_primary_timeout()
+                    self.receive_start_view(payload["view"], payload["op_log"], payload["op_num"], payload["commit_num"], payload["primary_id"])
                     return "ACK", {}
 
                 else:
@@ -328,7 +367,8 @@ class BaseProcess(ABC):
                 if target_id == self.replica_id:
                     threading.Thread(target=self.dispatch_message, args=("DO_VIEW_CHANGE", dvc_payload), daemon=True).start()
                 else:
-                    target_host, target_port = self.all_replicas[target_id]
+                    target_host = self.all_replicas[target_id][0]
+                    target_port = int(target_id)   # porta do socket, não a HTTP
                     threading.Thread(
                         target=self.send_to_replica,
                         args=(target_host, target_port, "DO_VIEW_CHANGE", dvc_payload),

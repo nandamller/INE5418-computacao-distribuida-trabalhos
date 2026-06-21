@@ -8,7 +8,7 @@ HOST = os.getenv("HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", "6061"))
 PRIMARY_ID = int(os.getenv("PRIMARY_ID", "6061"))
 
-DEFAULT_TOPOLOGY = '[["process1", 7061], ["process2", 7062], ["process3", 7063]]'
+DEFAULT_TOPOLOGY = '{"6061":["process1",7061],"6062":["process2",7062],"6063":["process3",7063]'
 CLUSTER_TOPOLOGY = os.getenv("CLUSTER_TOPOLOGY", DEFAULT_TOPOLOGY)
 
 
@@ -24,7 +24,7 @@ class Process1(BaseProcess, VRNode):
 
         replica_id = port
         VRNode.__init__(self, current_address=(host, port), replica_id=replica_id, all_replicas=topology, primary_id=primary_id)
-
+        self._start_timeout_watcher()
 
 if __name__ == '__main__':
     topology = json.loads(CLUSTER_TOPOLOGY)
