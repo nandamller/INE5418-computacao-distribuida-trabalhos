@@ -1,3 +1,14 @@
+"""
+Viewstamped Replication (VR) — o building block de consenso/replicação do projeto.
+
+Este módulo é a lógica pura do protocolo (sem rede): manutenção do log replicado,
+quórum, commit, eleição de líder (view change) e recuperação. A camada de rede que
+o aciona está em process/Process.py.
+
+No contexto da aplicação (reserva distribuída de assentos de avião), cada operação do
+log é um pedido de reserva. O VR garante que todas as réplicas/terminais apliquem as
+reservas na MESMA ordem, então o mapa de assentos converge igual em todos os nós.
+"""
 import time
 
 from typing import List, Dict, Any
@@ -190,9 +201,11 @@ class VRNode:
         while self.commit_num < target_commit:
             self.commit_num += 1
             entry = self.op_log[self.commit_num - 1] # 0-indexed log array
-            
-            # State Machine Application Execution Simulation
-            result = f"Executed: {entry['op']}" 
+
+            # Aplicação na máquina de estado (mapa de assentos). Aqui a "aplicação"
+            # é simbólica: registra a reserva na ordem definida pelo consenso. Como
+            # todas as réplicas percorrem o log na mesma ordem, o resultado é o mesmo.
+            result = f"Reserva confirmada: {entry['op']}"
             
             # Finalize client table status
             self.client_table[entry["client_id"]] = {

@@ -21,11 +21,13 @@ class NetworkMessage(BaseModel):
 
 class BaseProcess(ABC):
     """
+    Camada de rede de uma réplica/terminal do sistema de reserva de assentos.
+
     Cada réplica atende dois canais ao mesmo tempo, no mesmo processo, em threads
     diferentes (para compartilhar o mesmo estado sem precisar de IPC):
 
       - socket "cru" (porta `port`)        -> protocolo de replicação ENTRE réplicas
-      - HTTP via Flask (porta `flask_port`) -> requisições de clientes/admin
+      - HTTP via Flask (porta `flask_port`) -> requisições de passageiros/admin
 
     Além disso, quando esta réplica é a primária, uma terceira thread (heartbeat)
     reenvia COMMIT(view, commit_num) periodicamente pros backups mesmo sem operação
@@ -64,7 +66,7 @@ class BaseProcess(ABC):
 
 
     # ---------------------------------------------------------------------
-    # HTTP (Flask) - cliente externo fala com a réplica por aqui
+    # HTTP (Flask) - o passageiro (cliente externo) fala com o terminal por aqui
     # ---------------------------------------------------------------------
 
     def _register_common_routes(self):

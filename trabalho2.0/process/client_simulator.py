@@ -1,20 +1,22 @@
 """
-Simulador de clientes para o cluster Viewstamped Replication.
+Simulador de passageiros para o sistema distribuído de reserva de assentos.
 
-Cada "cliente simulado" roda numa thread própria e manda operações sequenciais
-(request_num incremental, como o protocolo exige) pro endereço HTTP que acredita
-ser o primário. Se errar (réplica responde 409), segue o redirecionamento que o
-próprio servidor devolve. Se o endpoint atual estiver fora do ar (conexão recusada,
-timeout -- ex.: durante uma troca de view), roda pro próximo endereço conhecido.
+Cada "passageiro simulado" roda numa thread própria e manda pedidos de reserva
+sequenciais (request_num incremental, como o protocolo exige) pro terminal HTTP que
+acredita ser o primário. Se errar (réplica responde 409), segue o redirecionamento
+que o próprio terminal devolve. Se o endpoint atual estiver fora do ar (conexão
+recusada, timeout -- ex.: durante uma troca de view), roda pro próximo terminal
+conhecido. É o cenário NORMAL + CONCORRÊNCIA: vários passageiros reservando ao mesmo
+tempo, validando que o cluster ordena tudo de forma consistente.
 
 Variáveis de ambiente:
   CLUSTER_TOPOLOGY   JSON com [[host, porta_socket], ...] -- mesmo formato usado
                      pelos process1/2/3.py. A porta HTTP de cada réplica é
                      SEMPRE porta_socket + 1000 (convenção do BaseProcess).
-  NUM_CLIENTS        quantos clientes simulados rodar em paralelo (default 3)
-  OPS_PER_CLIENT     quantas operações cada cliente manda; <=0 = roda pra sempre (default 20)
-  MIN_THINK_TIME     espera mínima (s) entre uma operação e a próxima de um cliente (default 0.5)
-  MAX_THINK_TIME     espera máxima (s) entre uma operação e a próxima de um cliente (default 2.0)
+  NUM_CLIENTS        quantos passageiros simulados rodar em paralelo (default 3)
+  OPS_PER_CLIENT     quantas reservas cada passageiro tenta; <=0 = roda pra sempre (default 20)
+  MIN_THINK_TIME     espera mínima (s) entre uma reserva e a próxima de um passageiro (default 0.5)
+  MAX_THINK_TIME     espera máxima (s) entre uma reserva e a próxima de um passageiro (default 2.0)
   REQUEST_TIMEOUT    timeout (s) de cada chamada HTTP (default 3.0)
 """
 import json
@@ -50,7 +52,7 @@ def log(tag: str, msg: str):
 
 
 class SimulatedClient:
-    """Cliente sequencial: um request_num por vez, nunca em paralelo consigo mesmo."""
+    """Passageiro sequencial: um request_num por vez, nunca em paralelo consigo mesmo."""
 
     def __init__(self, client_id: int):
         self.client_id = client_id
@@ -118,7 +120,11 @@ class SimulatedClient:
         done = 0
         while ops_count <= 0 or done < ops_count:
             done += 1
-            op = f"SET key{self.client_id}={random.randint(1, 1000)}"
+            # Pedido de reserva de um assento aleatório (fila 1-30, colunas A-F).
+            # A op é apenas uma string opaca para o protocolo: o que importa é a
+            # ORDEM em que entra no log replicado, decidida pelo consenso.
+            seat = f"{random.randint(1, 30)}{random.choice('ABCDEF')}"
+            op = f"RESERVE {seat} passenger=P{self.client_id}"
             self.send_one(op)
             time.sleep(random.uniform(MIN_THINK_TIME, MAX_THINK_TIME))
         log(f"client-{self.client_id}", "terminou.")
@@ -144,8 +150,8 @@ def wait_for_cluster(timeout: float = 30.0):
 
 
 def main():
-    log("startup", f"endpoints conhecidos: {ENDPOINTS}")
-    log("startup", f"{NUM_CLIENTS} clientes, {OPS_PER_CLIENT if OPS_PER_CLIENT > 0 else 'infinitas'} operações cada")
+    log("startup", f"terminais conhecidos: {ENDPOINTS}")
+    log("startup", f"{NUM_CLIENTS} passageiros, {OPS_PER_CLIENT if OPS_PER_CLIENT > 0 else 'infinitas'} reservas cada")
     wait_for_cluster()
 
     threads = []
@@ -158,7 +164,7 @@ def main():
     for t in threads:
         t.join()
 
-    log("startup", "todos os clientes terminaram.")
+    log("startup", "todos os passageiros terminaram.")
 
 
 if __name__ == "__main__":

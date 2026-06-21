@@ -1,4 +1,10 @@
+# Sistema distribuído de reserva de assentos de avião (consenso via Viewstamped
+# Replication). process1/2/3 são os terminais (réplicas) do cluster; o coordenador
+# (primário) inicial é o 6061. Dois profiles de demonstração:
+#   --profile simulation     -> passageiros concorrentes (cenário normal)
+#   --profile election-test  -> falha do líder + eleição + recuperação (cenário de falha)
 services:
+  # Terminal coordenador inicial (primário) do cluster de reserva.
   process1:
     build:
       context: .

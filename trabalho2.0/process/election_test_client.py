@@ -1,28 +1,32 @@
 """
-Teste de eleição de líder com clientes reais.
+Teste de eleição de líder com passageiros reais (cenário de FALHA).
+
+Simula a queda do terminal coordenador (primário) de um sistema de reserva de
+assentos: enquanto passageiros tentam reservar, o líder é congelado, o cluster
+elege um novo coordenador e o terminal que caiu se reintegra como backup.
 
 Roteiro
 -------
   Fase 1 — Aquecimento
-    Dois clientes mandam algumas operações para confirmar que o cluster está
+    Dois passageiros mandam algumas reservas para confirmar que o cluster está
     saudável e que o nó 1 (primário inicial) está respondendo.
 
   Fase 2 — Falha simulada do líder
     O endpoint POST /admin/freeze é chamado no primário. Ele segura o self.lock
     internamente por N segundos, bloqueando PREPARE, COMMIT e qualquer mensagem
-    de replicação — simula um processo pendurado sem matar o container.
+    de replicação — simula um terminal pendurado sem matar o container.
 
-  Fase 3 — Operações durante a falha
-    Os mesmos clientes continuam tentando mandar operações. Eles vão colidir com
-    o nó travado, iterar pelos outros endpoints e esperar o cluster eleger um novo
+  Fase 3 — Reservas durante a falha
+    Os mesmos passageiros continuam tentando reservar. Eles vão colidir com o nó
+    travado, iterar pelos outros terminais e esperar o cluster eleger um novo
     primário antes de prosseguir.
 
   Fase 4 — Verificação da eleição
     Verifica que algum nó sobrevivente assumiu como primário numa view mais alta.
 
   Fase 5 — Retorno do líder antigo
-    O freeze expira sozinho. O nó libera o lock, recebe START_VIEW do novo
-    primário e sincroniza seu estado via get_state / new_state.
+    O freeze expira sozinho. O nó libera o lock, recebe um state transfer do novo
+    primário (PREPARE/COMMIT de view mais nova) e sincroniza seu estado.
 
   Fase 6 — Verificação do reingresso
     Confirma que o process1 voltou como backup na nova view.
@@ -93,13 +97,13 @@ def http_get(endpoint: str, path: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Cliente sequencial (estilo client_simulator.py)
+# Passageiro sequencial (estilo client_simulator.py)
 # ---------------------------------------------------------------------------
 
 class Client:
     """
-    Cliente com request_num incremental, auto-redirecionamento em 409 e
-    retry em 503. Itera pelos endpoints conhecidos se o atual não responder.
+    Passageiro com request_num incremental, auto-redirecionamento em 409 e
+    retry em 503. Itera pelos terminais conhecidos se o atual não responder.
     """
 
     def __init__(self, client_id: int, start_endpoint: str):
@@ -236,7 +240,7 @@ def check(condition: bool, msg: str):
 
 def main():
 
-    print("##  Teste de eleição de líder — Viewstamped Replication   ##\n")
+    print("##  Reserva de assentos — eleição de líder (Viewstamped Replication)   ##\n")
 
 
     # ── 1. Cluster up ──────────────────────────────────────────────────────
@@ -261,19 +265,19 @@ def main():
     # ── 2. Aquecimento ─────────────────────────────────────────────────────
     print("\n Fase 2: aquecimento (operações normais) ")
 
-    # Dois clientes, ambos apontando para o primário conhecido
+    # Dois passageiros, ambos apontando para o primário conhecido
     alice = Client(client_id=1, start_endpoint=initial_primary_ep)
     bob   = Client(client_id=2, start_endpoint=initial_primary_ep)
 
     for i in range(1, 4):
-        r = alice.send(f"SET alice={i}", label="warmup")
+        r = alice.send(f"RESERVE {i}A passenger=alice", label="warmup")
         check(r is not None and r["status_code"] in (200, 202),
-              f"Alice op {i} aceita pelo cluster")
+              f"Alice reserva {i} aceita pelo cluster")
 
     for i in range(1, 4):
-        r = bob.send(f"SET bob={i}", label="warmup")
+        r = bob.send(f"RESERVE {i}B passenger=bob", label="warmup")
         check(r is not None and r["status_code"] in (200, 202),
-              f"Bob op {i} aceita pelo cluster")
+              f"Bob reserva {i} aceita pelo cluster")
 
     # ── 3. Falha simulada: freeze via HTTP ─────────────────────────────────
     frozen_key = initial_primary_key
@@ -293,7 +297,7 @@ def main():
 
     # ── 4. Operações durante a falha ───────────────────────────────────────
     print("\n Fase 4: operações enquanto o líder está travado ")
-    log("info", "Clientes continuam enviando; espera-se 409/timeout até a eleição")
+    log("info", "Passageiros continuam reservando; espera-se 409/timeout até a eleição")
 
     # Alice e Bob tentam em background enquanto monitoramos a eleição
     results_during_failure: list[dict | None] = []
@@ -301,7 +305,7 @@ def main():
 
     def client_ops_during_failure(client: Client, n: int):
         for i in range(n):
-            r = client.send(f"SET {client.client_id}_fail={i}", label="during-failure")
+            r = client.send(f"RESERVE {10 + i}{chr(ord('C') + client.client_id)} passenger=P{client.client_id}", label="during-failure")
             with lock:
                 results_during_failure.append(r)
             time.sleep(0.5)
@@ -347,14 +351,14 @@ def main():
     bob.endpoint   = new_ep
 
     for i in range(1, 4):
-        r = alice.send(f"SET alice_post={i}", label="post-election")
+        r = alice.send(f"RESERVE {20 + i}A passenger=alice", label="post-election")
         check(r is not None and r["status_code"] in (200, 202),
-              f"Alice pós-eleição op {i} aceita")
+              f"Alice pós-eleição reserva {i} aceita")
 
     for i in range(1, 4):
-        r = bob.send(f"SET bob_post={i}", label="post-election")
+        r = bob.send(f"RESERVE {20 + i}B passenger=bob", label="post-election")
         check(r is not None and r["status_code"] in (200, 202),
-              f"Bob pós-eleição op {i} aceita")
+              f"Bob pós-eleição reserva {i} aceita")
 
     # ── 7. Aguarda o freeze expirar e o nó reintegrar ──────────────────────
     print(f"\n Fase 7: aguardando freeze expirar e '{frozen_ep}' reintegrar ")
@@ -396,7 +400,7 @@ def main():
     # ── 9. Operação final com todos os nós ─────────────────────────────────
     print("\n Fase 9: operação final com cluster completo ")
     carol = Client(client_id=3, start_endpoint=new_ep)
-    r = carol.send("SET carol=final_check", label="final")
+    r = carol.send("RESERVE 30F passenger=carol", label="final")
     check(r is not None and r["status_code"] in (200, 202),
           "Operação final aceita pelo cluster completo")
 

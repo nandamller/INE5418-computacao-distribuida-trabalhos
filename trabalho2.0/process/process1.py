@@ -14,9 +14,10 @@ CLUSTER_TOPOLOGY = os.getenv("CLUSTER_TOPOLOGY", DEFAULT_TOPOLOGY)
 
 class Process1(BaseProcess, VRNode):
     """
-    Réplica VR. Herda de BaseProcess (socket de replicação + Flask) e de VRNode
-    (lógica do protocolo) ao mesmo tempo, para que self.prepare/self.prepare_ok/etc.
-    fiquem acessíveis nas rotas Flask e no dispatcher de mensagens do socket.
+    Réplica VR (um terminal de reserva de assentos). Herda de BaseProcess (socket de
+    replicação + Flask) e de VRNode (lógica do protocolo) ao mesmo tempo, para que
+    self.prepare/self.prepare_ok/etc. fiquem acessíveis nas rotas Flask e no
+    dispatcher de mensagens do socket.
     """
 
     def __init__(self, host: str, port: int, topology: list, primary_id: int):

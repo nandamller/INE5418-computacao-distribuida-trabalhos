@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 
 class OpPayload(BaseModel):
-    op: str  # The operation to execute, e.g., "SET x=1"
+    op: str  # A operação a replicar, p.ex. "RESERVE 12A passenger=P1"
 
 class PrepareArgs(BaseModel):
     view: int
